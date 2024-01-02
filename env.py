@@ -19,6 +19,8 @@ class StockMarket(gym.Env):
                  period_months=6,
                  lookback_steps=14,
                  use_sp500=False,
+                 log_transactions=False,
+                 trade_cost=None,
                  num_assets=1,
                  include_ti=False,
                  indicator_list=None,
@@ -46,6 +48,7 @@ class StockMarket(gym.Env):
             self.has_ui = False
 
         # Variables that define how the training/observations will work
+        self.trade_cost = trade_cost if trade_cost else 0
         self.total_cash = cash
         self.p_months = period_months
         self.lookback_steps = lookback_steps
@@ -56,6 +59,7 @@ class StockMarket(gym.Env):
         self.max_trade_perc = max_trade_perc
         self.short_selling = short_selling
         self.rolling_window_size = rolling_window_size
+        self.log_transactions = log_transactions
 
         # Instatiate StockData class
         self.data = StockData(
@@ -159,18 +163,22 @@ class StockMarket(gym.Env):
             self.action = "BUY"
 
             # Calculate how many shares to buy
-            total_possible = int(self.remaining_cash / self.current_price)
+            total_possible = int((self.remaining_cash - self.trade_cost) / self.current_price)
             shares_bought = int((total_possible * qty) * self.max_trade_perc)
 
             # Calc and update average cost of position
             prev_cost = self.cost_basis * self.shares_held
             additional_cost = shares_bought * self.current_price
-            self.remaining_cash -= additional_cost
+            self.remaining_cash -= (additional_cost + self.trade_cost)
             self.cost_basis = (
                 prev_cost + additional_cost) / (self.shares_held + shares_bought)
 
             # Update share count
             self.shares_held += shares_bought
+
+            # Print action to log
+            if self.log_transactions:
+                print(f"- BOUGHT { shares_bought} @ ${self.current_price:.2f}/share == ${(shares_bought * self.current_price):.2f}. Net Worth == ${self.net_worth:.2f}.")
 
         # Process SELL action (if stock is available)
         elif action_type <= 2:
@@ -181,8 +189,12 @@ class StockMarket(gym.Env):
             shares_sold = int(self.shares_held * qty)
             
             # Update portfolio
-            self.remaining_cash += shares_sold * self.current_price
+            self.remaining_cash += ((shares_sold * self.current_price) - self.trade_cost)
             self.shares_held -= shares_sold
+
+            # Print action to log
+            if self.log_transactions:
+                print(f"- SOLD {shares_sold} @ ${self.current_price:.2f}/share == ${(shares_sold * self.current_price):.2f}. Net Worth == ${self.net_worth:.2f}.")
 
         else:
 

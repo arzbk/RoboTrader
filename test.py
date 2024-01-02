@@ -8,15 +8,16 @@ import TD3
 import numpy as np
 from RLUtils import ReplayBuffer
 
-# Fixed seed for evaluations of policy - why not 42, haha.
-THE_MEANING_OF_LIFE = 42
+# Define some fixed variables for experiments
+train_seed = 42
+eval_seed = 84
 
 # Runs policy for X episodes and returns average reward
 def eval_policy(policy, eval_env, seed, eval_episodes=4):
     avg_reward = 0.
     print("Evaluating Policy...")
     for i in range(eval_episodes):
-        obs, done = eval_env.reset(seed=THE_MEANING_OF_LIFE + i, ), False
+        obs, done = eval_env.reset(seed=seed + i, ), False
         while not done:
             action = policy.select_action(np.array(obs))
             obs, reward, done, _ = eval_env.step(action)
@@ -39,16 +40,16 @@ if __name__ == "__main__":
     parser.add_argument("--policy", default="TD3")                      # Policy name (TD3, DDPG or OurDDPG)
     parser.add_argument("--env", default="Base")                        # Name of environment (Base, Partial, or Full)
     parser.add_argument("--cash", default=10000)                        # Starting cash for portfolio
-    parser.add_argument("--max_trade_perc", default=0.60)               # The maximum amount of remaining cash that can be traded at once.
-    parser.add_argument("--seed", default=get_random_seed(), type=int)  # Sets Gym, PyTorch and Numpy seeds
+    parser.add_argument("--max_trade_perc", default=0.80)               # The maximum amount of remaining cash that can be traded at once.
+    parser.add_argument("--seed", default=train_seed, type=int)  # Sets Gym, PyTorch and Numpy seeds
     parser.add_argument("--start_timesteps", default=1e3, type=int)     # Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=10, type=int)            # How often (episodes) we evaluate the model
-    parser.add_argument("--max_timesteps", default=1e6, type=int)       # Max time steps to run environment
-    parser.add_argument("--expl_noise", default=0.1, type=float)        # Std of Gaussian exploration noise
-    parser.add_argument("--batch_size", default=256, type=int)          # Batch size for both actor and critic
+    parser.add_argument("--max_timesteps", default=1e6, type=int)       # Max GLOBAL time steps to run environment
+    parser.add_argument("--expl_noise", default=0.2, type=float)        # Std of Gaussian exploration noise
+    parser.add_argument("--batch_size", default=128, type=int)          # Batch size for both actor and critic
     parser.add_argument("--discount", default=0.99, type=float)         # Discount factor
     parser.add_argument("--tau", default=0.005, type=float)             # Target network update rate
-    parser.add_argument("--policy_noise", default=0.3)                  # Noise added to target policy during critic update
+    parser.add_argument("--policy_noise", default=0.2)                  # Noise added to target policy during critic update
     parser.add_argument("--noise_clip", default=0.5)                    # Range to clip target policy noise
     parser.add_argument("--policy_freq", default=2, type=int)           # Frequency of delayed policy updates
     parser.add_argument("--save_model", action="store_true")            # Save model and optimizer parameters
@@ -76,6 +77,7 @@ if __name__ == "__main__":
         include_ti=True,
         period_months=12,
         use_sp500=True,
+        trade_cost=7.99,
         lookback_steps=lookback_steps,
         render_mode="text",
         indicator_list=ti_list,
