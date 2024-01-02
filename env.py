@@ -15,7 +15,7 @@ class StockMarket(gym.Env):
                  cash=10000,
                  max_trade_perc=1.0,
                  short_selling=True,
-                 rolling_window_size=60,
+                 rolling_window_size=28,
                  period_months=6,
                  lookback_steps=14,
                  use_sp500=False,
@@ -95,7 +95,7 @@ class StockMarket(gym.Env):
         self.cost_basis = 0
 
         # Reset Stock Data
-        self.data.reset(seed, new_ticker=True, new_dates=True)
+        self.data.reset(seed, new_ticker=new_ticker, new_dates=new_dates)
 
         if self.has_ui:
 
@@ -126,7 +126,7 @@ class StockMarket(gym.Env):
         # Set the current price to random price somewhere close to the close price
         perc_of_close = random.uniform(0.97, 1.03)
         self.step_data = self.data[0]
-        self.current_price = self.step_data['Adj Close'] * perc_of_close
+        self.current_price = self.step_data['Close'] * perc_of_close
 
         # For remaining cash, express as percentage of total portfolio value
         rc = self.remaining_cash / self.net_worth
@@ -138,9 +138,9 @@ class StockMarket(gym.Env):
         obs_arr = np.array([rc, so])
 
         # For close price and tech indicators, do a rolling z-score normalization
-        col_list = ['Close']
+        col_list = ['Close_delta']
         if self.include_ti:
-            col_list += self.data.indicator_list
+            col_list += [ind + "_delta" for ind in self.data.indicator_list]
 
         for col in col_list:
             sc = StandardScaler()
@@ -209,6 +209,13 @@ class StockMarket(gym.Env):
             self.cost_basis = 0
 
         return
+
+
+    def calculate_reward(self):
+
+        delay_modifier = (self.data.current_step / self.data.max_steps)
+        return self.net_worth * delay_modifier
+
         
     
     # Process a time step in the execution of trading simulation
@@ -223,8 +230,7 @@ class StockMarket(gym.Env):
         self._take_action(action)
 
         # Calculate reward for action
-        delay_modifier = (self.data.current_step / self.data.max_steps)
-        reward = self.net_worth * delay_modifier
+        reward = self.calculate_reward()
 
         # Conditions for ending the training episode
         obs = None

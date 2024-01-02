@@ -1,5 +1,6 @@
 from datetime import timedelta
 from datetime import datetime
+from pandas.api.types import is_datetime64_any_dtype as is_datetime
 import calendar
 import random
 import numpy as np
@@ -79,6 +80,7 @@ class StockData:
         if self.use_sp500:
 
             df = self.get_stock_data(self.use_sp500)
+            self.ticker = "SPY"
 
         else:
 
@@ -110,6 +112,9 @@ class StockData:
         # Add computed values to retrieved data
         if self.include_ti:
             self.validate_technical_indicators()
+
+        # Add computed delta columns (% chng between rows for each col)
+        self.validate_delta_columns()
 
         # Cache dataframe now that any applicable indicators have been pre-computed
         self.yf.update_cache(df=df, start=self.start_date, end=self.end_date, ticker=self.ticker)
@@ -145,6 +150,18 @@ class StockData:
                     self.indicator_args.pop(ind)
 
                 df[ind] = res
+
+
+    # Dynamically check for and add missing pct change columns for each regular column
+    def validate_delta_columns(self):
+        df = self.stock_data
+
+        # For each column that is not a delta column, and not date or datetime
+        for col in filter(lambda s: "_delta" not in s, df.columns):
+            if not is_datetime(df[col]):
+                delta_col = col + "_delta"
+                if delta_col not in df.columns:
+                    df[delta_col] = df[col].pct_change()
 
 
     def __len__(self):

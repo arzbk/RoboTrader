@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_timesteps", default=1e6, type=int)       # Max GLOBAL time steps to run environment
     parser.add_argument("--expl_noise", default=0.2, type=float)        # Std of Gaussian exploration noise
     parser.add_argument("--batch_size", default=128, type=int)          # Batch size for both actor and critic
-    parser.add_argument("--discount", default=0.99, type=float)         # Discount factor
+    parser.add_argument("--discount", default=0.85, type=float)         # Discount factor
     parser.add_argument("--tau", default=0.005, type=float)             # Target network update rate
     parser.add_argument("--policy_noise", default=0.2)                  # Noise added to target policy during critic update
     parser.add_argument("--noise_clip", default=0.5)                    # Range to clip target policy noise

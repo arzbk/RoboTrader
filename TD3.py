@@ -11,8 +11,6 @@ class Actor(nn.Module):
 
     # Initialize nn.Module and setup network
     def __init__(self, state_params, action_params):
-
-
         super(Actor, self).__init__()
 
         self.layer_1 = nn.Linear(state_params, 256)
@@ -31,8 +29,6 @@ class Critic(nn.Module):
 
     def __init__(self, state_dim, action_dim):
         super(Critic, self).__init__()
-
-        print(state_dim + action_dim)
 
         # Q1 architecture
         self.l1 = nn.Linear(state_dim + action_dim, 256)
