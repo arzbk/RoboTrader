@@ -167,20 +167,33 @@ class StockMarket(gym.Env):
         action_type, qty = action
 
         # Process BUY action (if cash available)
-        if action_type <= 1 and self.net_worth >= self.current_price:
+        if action_type <= 1 and self.net_worth >= self.current_price and qty > 0:
 
             self.action = "BUY"
 
             # Calculate how many shares to buy
             total_possible = int((self.remaining_cash - self.trade_cost) / self.current_price)
             shares_bought = int((total_possible * qty) * self.max_trade_perc)
+            prev_cost = None
+            additional_cost = None
 
-            # Calc and update average cost of position
-            prev_cost = self.cost_basis * self.shares_held
-            additional_cost = shares_bought * self.current_price
-            self.remaining_cash -= (additional_cost + self.trade_cost)
-            self.cost_basis = (
-                prev_cost + additional_cost) / (self.shares_held + shares_bought)
+            if shares_bought > 0:
+
+                # Calc and update average cost of position
+                prev_cost = self.cost_basis * self.shares_held
+                additional_cost = shares_bought * self.current_price
+                self.remaining_cash -= (additional_cost + self.trade_cost)
+
+                if (prev_cost + additional_cost) == 0 or (self.shares_held + shares_bought) == 0:
+                    raise Exception(f"""Entered Error State: Invalid cost basis (division by zero). See below:
+                    Current Price: ${self.current_price:.2f}
+                    Previous Cost: ${prev_cost:.2f}
+                    Additional Cost: ${additional_cost:.2f}
+                    Shares Held: {self.shares_held}
+                    Shares Bought: {shares_bought}""")
+
+                self.cost_basis = (
+                (prev_cost + additional_cost) / (self.shares_held + shares_bought))
 
             # Update share count
             self.shares_held += shares_bought
@@ -192,26 +205,26 @@ class StockMarket(gym.Env):
         # Process SELL action (if stock is available)
         elif action_type <= 2:
 
+            self.action = "HOLD"
+
+        elif self.shares_held > 0:
+
             self.action = "SELL"
 
             # Calculate how many shares to sell
             shares_sold = int(self.shares_held * qty)
-            
+
             # Update portfolio
             self.remaining_cash += ((shares_sold * self.current_price) - self.trade_cost)
             self.shares_held -= shares_sold
 
             # Print action to log
             if self.log_transactions:
-                print(f"- SOLD {shares_sold} @ ${self.current_price:.2f}/share == ${(shares_sold * self.current_price):.2f}. Net Worth == ${self.net_worth:.2f}.")
-
-        else:
-
-            self.action = "HOLD"
+                print(
+                    f"- SOLD {shares_sold} @ ${self.current_price:.2f}/share == ${(shares_sold * self.current_price):.2f}. Net Worth == ${self.net_worth:.2f}.")
 
         # Update Net Worth for both actions above
         self.net_worth = self.remaining_cash + self.shares_held * self.current_price
-
 
         # If all shares are sold, then cost basis is reset
         if self.shares_held == 0:
@@ -223,18 +236,14 @@ class StockMarket(gym.Env):
     def calculate_reward(self, prev_net):
 
         # Calculate difference in net worth from t-1 to t
-        net_change = self.net_worth = prev_net
+        net_change = self.net_worth - prev_net
+        #print(f"Net: ${self.net_worth:.2f} vs. Prev Net: ${prev_net:.2f} == reward: {str(net_change)}")
         return net_change
 
         
     
     # Process a time step in the execution of trading simulation
     def step(self, action):
-
-        # if ui enabled, slow down processing for human eyes
-        if self.has_ui:
-            self.render(action=action)
-            time.sleep(0.1)
 
         # Get net_worth before action as portfolio value @ t - 1
         prev_net = self.net_worth
@@ -248,6 +257,11 @@ class StockMarket(gym.Env):
         # Conditions for ending the training episode
         obs = None
         done = (self.data.current_step + self.data.start_index + 1) == self.data.max_steps
+
+        # if ui enabled, slow down processing for human eyes
+        if self.has_ui:
+            self.render(action=self.action)
+            time.sleep(0.05)
 
         # Get next observation
         if not done:
@@ -263,12 +277,13 @@ class StockMarket(gym.Env):
     # Render the stock and trading decisions to the screen
     def render(self, action=None):
 
-        if action[0] <= 1:
+        if action == "BUY":
             self.chart.mark_action("BUY")
 
-        elif action[0] <= 2 and self.current_price > self.cost_basis:
+        elif action == "SELL" and self.current_price > self.cost_basis:
             self.chart.mark_action("SELL", "PROFIT")
-        elif action[0] <= 2 and self.current_price < self.cost_basis:
+
+        elif action == "SELL" and self.current_price < self.cost_basis:
             self.chart.mark_action("SELL", "LOSS")
 
         self.chart.add_step_data(self.step_data)

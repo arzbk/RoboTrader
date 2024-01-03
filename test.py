@@ -12,11 +12,14 @@ train_seed = 42
 eval_seed = 84
 
 # Runs policy for X episodes and returns average reward
-def eval_policy(policy, eval_env, seed, eval_episodes=4):
+def eval_policy(policy, eval_env, seed, eval_episodes=4, render_ui=False):
     avg_reward = 0.
     print("Evaluating Policy...")
     for i in range(eval_episodes):
-        obs, done = eval_env.reset(seed=seed + i, ), False
+        if i == 0 and render_ui:
+            obs, done = eval_env.reset(seed=seed + i, has_ui=True), False
+        else:
+            obs, done = eval_env.reset(seed=seed + i, has_ui=False), False
         while not done:
             action = policy.select_action(np.array(obs))
             obs, reward, done, _ = eval_env.step(action)
@@ -51,20 +54,23 @@ if __name__ == "__main__":
     parser.add_argument("--policy_noise", default=0.1)                  # Noise added to target policy during critic update
     parser.add_argument("--noise_clip", default=0.5)                    # Range to clip target policy noise
     parser.add_argument("--policy_freq", default=2, type=int)           # Frequency of delayed policy updates
-    parser.add_argument("--save_model", action="store_true")            # Save model and optimizer parameters
+    parser.add_argument("--save_model", default=True)            # Save model and optimizer parameters
     parser.add_argument("--load_model", default="")                     # Model load file name, "" doesn't load, "default" uses file_name
     args = parser.parse_args()
+
+    home_dir = "Z:/VSCode/DRL_Trader/"
 
     file_name = f"{args.policy}_{args.env}_{args.seed}"
     print("---------------------------------------")
     print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
     print("---------------------------------------")
 
-    if not os.path.exists("./results"):
-        os.makedirs("./results")
+    if not os.path.exists(home_dir + "results"):
+        os.makedirs(home_dir + "results")
 
-    if args.save_model and not os.path.exists("./models"):
-        os.makedirs("./models")
+    if args.save_model and not os.path.exists(home_dir + "models"):
+        print("Auto-saving model as training progresses...")
+        os.makedirs(home_dir + "models")
 
     # Initialize environment
     lookback_steps = 14
@@ -78,7 +84,6 @@ if __name__ == "__main__":
         use_sp500=True,
         trade_cost=7.99,
         lookback_steps=lookback_steps,
-        render_mode="text",
         indicator_list=ti_list,
         indicator_args=ti_args
     )
@@ -111,6 +116,7 @@ if __name__ == "__main__":
         policy.load(f"./models/{policy_file}")
 
     # Evaluate untrained policy
+    eval_num = 1
     evaluations = [eval_policy(policy, env, eval_seed)]
 
     # Declare training vars
@@ -176,14 +182,15 @@ if __name__ == "__main__":
             t = 0
 
             # Render UI every fifth episode after sufficient training has occured
-            has_ui = True if global_t > args.start_timesteps * 2 and episode_num % 5 == 0 else False
-            obs = env.reset(seed=s + episode_num * 10, has_ui=has_ui)
+            obs = env.reset(seed=s + (episode_num * 10))
 
-            # Evaluate every n episodes
+            # Evaluate every n episodes - rendering every third eval after the training has started
             if (episode_num + 1) % args.eval_freq == 0:
+                eval_num += 1
+                render_ui = True if eval_num % 3 == 0 and global_t < args.start_timesteps else False
                 evaluations.append(eval_policy(policy, env, args.seed))
-                np.save(f"./results/{file_name}", evaluations)
+                np.save(home_dir + f"results/{file_name}", evaluations)
                 if args.save_model:
-                    policy.save(f"./models/{file_name}")
+                    policy.save(home_dir + f"models/{file_name}")
 
         global_t += 1
