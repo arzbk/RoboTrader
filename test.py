@@ -7,12 +7,16 @@ import TD3
 import numpy as np
 from RLUtils import ReplayBuffer
 
+# Specifically for logging ML metrics
+import torch
+from torch.utils.tensorboard import SummaryWriter
+
 # Define some fixed variables for experiments
 train_seed = 42
 eval_seed = 84
 
 # Runs policy for X episodes and returns average reward
-def eval_policy(policy, eval_env, seed, eval_episodes=4, render_ui=False):
+def eval_policy(policy, eval_env, seed, render_ui=False, tb=None, eval_count=0, eval_episodes=4):
     avg_reward = 0.
     print("Evaluating Policy...")
     for i in range(eval_episodes):
@@ -27,11 +31,14 @@ def eval_policy(policy, eval_env, seed, eval_episodes=4, render_ui=False):
 
     avg_reward /= eval_episodes
 
+    # Log eval results to TB
+    if tb:
+        tb.add_scalar('Eval Average Reward', avg_reward / eval_episodes, eval_num)
+
     print("---------------------------------------")
     print(f"Finished! Evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
     print("---------------------------------------")
     return avg_reward
-
 
 def get_random_seed():
     return round(time.time())
@@ -43,7 +50,7 @@ if __name__ == "__main__":
     parser.add_argument("--env", default="Base")                        # Name of environment (Base, Partial, or Full)
     parser.add_argument("--cash", default=30000)                        # Starting cash for portfolio
     parser.add_argument("--max_trade_perc", default=0.80)               # The maximum amount of remaining cash that can be traded at once.
-    parser.add_argument("--seed", default=train_seed, type=int)  # Sets Gym, PyTorch and Numpy seeds
+    parser.add_argument("--seed", default=train_seed, type=int)         # Sets Gym, PyTorch and Numpy seeds
     parser.add_argument("--start_timesteps", default=5e3, type=int)     # Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=10, type=int)            # How often (episodes) we evaluate the model
     parser.add_argument("--max_timesteps", default=1e6, type=int)       # Max GLOBAL time steps to run environment
@@ -54,13 +61,13 @@ if __name__ == "__main__":
     parser.add_argument("--policy_noise", default=0.1)                  # Noise added to target policy during critic update
     parser.add_argument("--noise_clip", default=0.5)                    # Range to clip target policy noise
     parser.add_argument("--policy_freq", default=2, type=int)           # Frequency of delayed policy updates
-    parser.add_argument("--save_model", default=True)            # Save model and optimizer parameters
+    parser.add_argument("--save_model", default=True)                   # Save model and optimizer parameters
     parser.add_argument("--load_model", default="")                     # Model load file name, "" doesn't load, "default" uses file_name
     args = parser.parse_args()
 
     home_dir = "Z:/VSCode/DRL_Trader/"
 
-    file_name = f"{args.policy}_{args.env}_{args.seed}"
+    file_name = f"{args.policy}_{args.env}_{args.seed}_0.99_Gamma"
     print("---------------------------------------")
     print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
     print("---------------------------------------")
@@ -115,9 +122,12 @@ if __name__ == "__main__":
         policy_file = file_name if args.load_model == "default" else args.load_model
         policy.load(f"./models/{policy_file}")
 
+    # Used to integrate with tensorboard
+    tb = SummaryWriter(f'logs/{file_name}')  # You can choose any directory for your logs
+
     # Evaluate untrained policy
     eval_num = 1
-    evaluations = [eval_policy(policy, env, eval_seed)]
+    evaluations = [eval_policy(policy, env, eval_seed, False, tb, eval_num)]
 
     # Declare training vars
     global_t = 0
@@ -126,7 +136,7 @@ if __name__ == "__main__":
     episode_reward = 0
 
     # Prepare environment
-    s = train_seed  # get_random_seed()
+    s = train_seed
     obs = env.reset(seed=train_seed)
 
     # Run complete training iterations until args.max_timesteps is crossed - at which point finish episode and end
@@ -177,6 +187,9 @@ if __name__ == "__main__":
             # +1 to account for 0 indexing. +0 on ep_timesteps since it will increment +1 even if done=True
             print(f"Total T: {global_t + 1} Episode Num: {episode_num + 1} Episode T: {t + 1} Reward: {episode_reward:.3f}")
 
+            # Log total episode reward to TensorBoard
+            tb.add_scalar('Total Episode Reward', episode_reward, episode_num)
+
             episode_num += 1
             episode_reward = 0
             t = 0
@@ -188,7 +201,7 @@ if __name__ == "__main__":
             if (episode_num + 1) % args.eval_freq == 0:
                 eval_num += 1
                 render_ui = True if eval_num % 3 == 0 and global_t < args.start_timesteps else False
-                evaluations.append(eval_policy(policy, env, args.seed))
+                evaluations.append(eval_policy(policy, env, args.seed, render_ui, tb, eval_num))
                 np.save(home_dir + f"results/{file_name}", evaluations)
                 if args.save_model:
                     policy.save(home_dir + f"models/{file_name}")

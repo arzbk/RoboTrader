@@ -150,12 +150,7 @@ class StockMarket(gym.Env):
             col_series = self.data[-self.rolling_window_size:][col]
             shaped_series = col_series.to_numpy().reshape(-1, 1)
 
-            try:
-                scaled_series = sc.fit_transform(shaped_series)
-            except Exception:
-                print(f"Fucking Col {col} is FUCKED: Here's the shit:\n{str(shaped_series)}")
-                print("Also this fuckin shit:\n"+str(col_series))
-                sys.exit()
+            scaled_series = sc.fit_transform(shaped_series)
             obs_arr = np.append(obs_arr, scaled_series[-1][0])
 
         return obs_arr

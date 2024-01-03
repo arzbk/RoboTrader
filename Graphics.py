@@ -78,3 +78,4 @@ class StockChart(Chart):
     # Update chart with next step
     def add_step_data(self, step_data):
         self.update(step_data)
+
