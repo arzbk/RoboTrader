@@ -219,10 +219,11 @@ class StockMarket(gym.Env):
         return
 
 
-    def calculate_reward(self):
+    def calculate_reward(self, prev_net):
 
-        delay_modifier = (self.data.current_step / self.data.max_steps)
-        return self.net_worth * delay_modifier
+        # Calculate difference in net worth from t-1 to t
+        net_change = self.net_worth = prev_net
+        return net_change
 
         
     
@@ -234,11 +235,14 @@ class StockMarket(gym.Env):
             self.render(action=action)
             time.sleep(0.1)
 
+        # Get net_worth before action as portfolio value @ t - 1
+        prev_net = self.net_worth
+
         # Execute one time step within the environment
         self._take_action(action)
 
         # Calculate reward for action
-        reward = self.calculate_reward()
+        reward = self.calculate_reward(prev_net)
 
         # Conditions for ending the training episode
         obs = None
