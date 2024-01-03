@@ -156,12 +156,19 @@ class StockData:
     def validate_delta_columns(self):
         df = self.stock_data
 
+        # Replace zeros with NaN before below operation
+        df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace(0, pd.NA)
+
         # For each column that is not a delta column, and not date or datetime
         for col in filter(lambda s: "_delta" not in s, df.columns):
             if not is_datetime(df[col]):
                 delta_col = col + "_delta"
                 if delta_col not in df.columns:
                     df[delta_col] = df[col].pct_change()
+
+        #TODO: Come up with a better more feature-wise solution to handling inf values
+        df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace([np.inf, -np.inf], pd.NA)
+        df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].fillna(method='ffill')
 
 
     def __len__(self):

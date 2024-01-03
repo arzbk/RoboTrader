@@ -1,3 +1,5 @@
+import sys
+
 import gymnasium as gym
 from gym import spaces
 from sklearn.preprocessing import StandardScaler
@@ -15,7 +17,7 @@ class StockMarket(gym.Env):
                  cash=10000,
                  max_trade_perc=1.0,
                  short_selling=True,
-                 rolling_window_size=28,
+                 rolling_window_size=30,
                  period_months=6,
                  lookback_steps=14,
                  use_sp500=False,
@@ -146,7 +148,13 @@ class StockMarket(gym.Env):
             sc = StandardScaler()
             col_series = self.data[-self.rolling_window_size:][col]
             shaped_series = col_series.to_numpy().reshape(-1, 1)
-            scaled_series = sc.fit_transform(shaped_series)
+
+            try:
+                scaled_series = sc.fit_transform(shaped_series)
+            except Exception:
+                print(f"Fucking Col {col} is FUCKED: Here's the shit:\n{str(shaped_series)}")
+                print("Also this fuckin shit:\n"+str(col_series))
+                sys.exit()
             obs_arr = np.append(obs_arr, scaled_series[-1][0])
 
         return obs_arr
