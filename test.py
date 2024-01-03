@@ -11,6 +11,9 @@ from RLUtils import ReplayBuffer
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
+# Used to integrate with tensorboard
+tb = None
+
 # Define some fixed variables for experiments
 train_seed = 42
 eval_seed = 84
@@ -33,7 +36,7 @@ def eval_policy(policy, eval_env, seed, render_ui=False, tb=None, eval_count=0, 
 
     # Log eval results to TB
     if tb:
-        tb.add_scalar('Eval Average Reward', avg_reward / eval_episodes, eval_num)
+        tb.add_scalar('Eval Average Reward', avg_reward / eval_episodes, eval_count)
 
     print("---------------------------------------")
     print(f"Finished! Evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
@@ -43,7 +46,7 @@ def eval_policy(policy, eval_env, seed, render_ui=False, tb=None, eval_count=0, 
 def get_random_seed():
     return round(time.time())
 
-if __name__ == "__main__":
+def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", default="TD3")                      # Policy name (TD3, DDPG or OurDDPG)
@@ -122,7 +125,6 @@ if __name__ == "__main__":
         policy_file = file_name if args.load_model == "default" else args.load_model
         policy.load(f"./models/{policy_file}")
 
-    # Used to integrate with tensorboard
     tb = SummaryWriter(f'logs/{file_name}')  # You can choose any directory for your logs
 
     # Evaluate untrained policy
@@ -161,6 +163,10 @@ if __name__ == "__main__":
                     high * args.expl_noise,
                     size=None
                 )
+
+                # Log total episode reward to TensorBoard
+                tb.add_scalar('Exploration Noise', noise, global_t)
+
                 action[i] += noise
                 action[i] = action[i].clip(low, high)
 
@@ -176,6 +182,13 @@ if __name__ == "__main__":
             # Train agent after collecting sufficient data
             if global_t >= args.start_timesteps:
                 policy.train(replay_buffer, args.batch_size)
+
+                # Calculate trained step (global_t - args.start_timesteps)
+                train_step = global_t - args.start_timesteps
+
+                # Log actor and critic losses
+                tb.add_scalar('Actor Loss', policy.actor_loss.item(), train_step)
+                tb.add_scalar('Critic Loss', policy.critic_loss.item(), train_step)
 
             # Update counters
             t += 1
@@ -207,3 +220,17 @@ if __name__ == "__main__":
                     policy.save(home_dir + f"models/{file_name}")
 
         global_t += 1
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print('Exception - closing tensorboard stream nicely.')
+        try:
+            tb.close()
+            sys.exit(130)
+        except SystemExit:
+            tb.close()
+            os._exit(130)
+
+tb.close()

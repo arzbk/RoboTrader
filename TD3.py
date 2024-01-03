@@ -89,10 +89,12 @@ class TD3(object):
         self.actor = Actor(self.state_params, self.action_params).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=3e-4)
+        self.actor_loss = None
 
         self.critic = Critic(self.state_params, self.action_params).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=3e-4)
+        self.critic_loss = None
 
         self.action_range = action_range
         self.discount = discount
@@ -169,24 +171,24 @@ class TD3(object):
         q_vals = self.critic(state, action)
 
         # Compute critic loss across all critics
-        critic_loss = 0
+        self.critic_loss = 0
         for q_val in q_vals:
-            critic_loss = F.mse_loss(q_val, target_q) + critic_loss
+            self.critic_loss = F.mse_loss(q_val, target_q) + self.critic_loss
 
         # Optimize the critic
         self.critic_optimizer.zero_grad()
-        critic_loss.backward()
+        self.critic_loss.backward()
         self.critic_optimizer.step()
 
         # Only update policy every n iterations - where n = policy_freq
         if self.total_it % self.policy_freq == 0:
 
             # Compute actor loss
-            actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
+            self.actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
             
             # Optimize the actor 
             self.actor_optimizer.zero_grad()
-            actor_loss.backward()
+            self.actor_loss.backward()
             self.actor_optimizer.step()
 
             # Update the frozen target models
