@@ -174,7 +174,10 @@ if __name__ == "__main__":
             episode_num += 1
             episode_reward = 0
             t = 0
-            obs = env.reset(seed=s + episode_num)
+
+            # Render UI every fifth episode after sufficient training has occured
+            has_ui = True if global_t > args.start_timesteps * 2 and episode_num % 5 == 0 else False
+            obs = env.reset(seed=s + episode_num * 10, has_ui=has_ui)
 
             # Evaluate every n episodes
             if (episode_num + 1) % args.eval_freq == 0:

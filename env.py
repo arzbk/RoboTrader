@@ -13,7 +13,6 @@ import pandas as pd
 class StockMarket(gym.Env):
 
     def __init__(self,
-                 render_mode="chart",
                  cash=10000,
                  max_trade_perc=1.0,
                  short_selling=True,
@@ -39,15 +38,11 @@ class StockMarket(gym.Env):
         obs_dim_cnt = 1 + (num_assets * int(include_news)) + (num_assets * (2 + len(indicator_list)))
         self.observation_space = spaces.Box(low=0, high=1, shape=(12,), dtype=np.float64)
 
-        self.render_mode = render_mode
+        self.render_mode = None
         
         # Intialize a live charting display for human feedback
-        self.ui = None
-        if self.render_mode.upper() == "CHART":
-            self.has_ui = True
-            self.chart = StockChart(toolbox=False, include_table=True, table_cols=['Cash', 'Shares', 'Value', 'Net'])
-        else:
-            self.has_ui = False
+        self.has_ui = False
+        self.chart = StockChart(toolbox=False, include_table=True, table_cols=['Cash', 'Shares', 'Value', 'Net'])
 
         # Variables that define how the training/observations will work
         self.trade_cost = trade_cost if trade_cost else 0
@@ -85,7 +80,10 @@ class StockMarket(gym.Env):
 
         
     # Resets env and state    
-    def reset(self, seed, new_ticker=True, new_dates=True):
+    def reset(self, seed, new_ticker=True, new_dates=True, has_ui=False):
+
+        # Set to True if we are rendering UI for this iteration
+        self.has_ui = has_ui
 
         # Set random seed to be used system wide
         random.seed(a=seed)
@@ -104,6 +102,9 @@ class StockMarket(gym.Env):
             # Reset chart
             self.chart.reset(self.data.get_leading_data())
             self.chart.show()
+
+        else:
+            self.chart.hide()
 
         # Make first observation
         return self._next_observation()
