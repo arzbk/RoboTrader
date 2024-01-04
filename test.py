@@ -92,7 +92,7 @@ if __name__ == '__main__':
         include_ti=True,
         period_months=72,
         num_assets=5,
-        fixed_start_date=datetime.datetime(2010, 1, 1),
+        fixed_start_date=datetime(2010, 1, 1),
         trade_cost=7.99,
         lookback_steps=lookback_steps,
         indicator_list=ti_list,

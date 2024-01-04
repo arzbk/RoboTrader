@@ -143,7 +143,7 @@ class StockMarket(gym.Env):
         self.step_data = self.data[0]
 
         # Initialize observation (state) array to be sent to the networks
-        obs_arr = np.array()
+        obs_arr = np.array([])
 
         # Remaining cash for network to use
         obs_arr = np.append(obs_arr, self.remaining_cash)
@@ -169,7 +169,7 @@ class StockMarket(gym.Env):
             # Normalize and append features to observation array
             for col in col_list:
                 sc = StandardScaler()
-                col_series = self.data[asset][-self.rolling_window_size:][col]
+                col_series = self.data[-self.rolling_window_size:][asset][col]
                 shaped_series = col_series.to_numpy().reshape(-1, 1)
                 scaled_series = sc.fit_transform(shaped_series)
                 obs_arr = np.append(obs_arr, scaled_series[-1][0])

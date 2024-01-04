@@ -41,6 +41,7 @@ class StockData:
         self.fixed_start_date = fixed_start_date
         self.fixed_portfolio = fixed_portfolio
         self.p_months = period_months
+        self.lead_period = 3 # 3 Months of data prior to observed trading period
         self.num_assets = num_assets
         self.lead_date = None
         self.start_date = None
@@ -76,8 +77,9 @@ class StockData:
         if self.fixed_start_date and not self.start_date:
 
             # Determine start and end date for episode
-            self.start_date, self.end_date = self.get_trading_period(self, self.fixed_start_date)
-            self.lead_date = self.get_lead_up_period(self.start_date)
+            self.start_date, self.end_date = self.get_trading_period(self.fixed_start_date)
+            self.quarter = self.get_last_quarter(self.fixed_start_date)
+            self.lead_date = self.get_lead_up_period(self.start_date, day=1)
 
         elif new_dates:
 
@@ -91,6 +93,8 @@ class StockData:
 
         # Initialize or reset stock selections and data
         if self.fixed_portfolio and not self.stock_data:
+
+            self.stock_data = {}
 
             for ticker in self.fixed_portfolio:
 
@@ -115,6 +119,7 @@ class StockData:
         elif new_tickers or not self.stock_data:
 
             self.stock_data = {}
+            self.leading_data = {}
 
             for i in range(0, self.num_assets):
 
@@ -126,16 +131,16 @@ class StockData:
                     ticker = self.stocks[self.quarter][stock_idx]
                     df = self.get_stock_data(ticker)
                     if self.is_valid_data(df):
+                        self.stock_data[ticker] = df
                         break
 
                 # Prepare dataframe for training and testing
-                self.preprocess_dataframe(df, ticker)
+                self.preprocess_dataframe(self.stock_data[ticker], ticker)
 
         # Reset i for new episode
         self.i = self.start_index
 
         return list(self.stock_data.keys())
-
 
     def preprocess_dataframe(self, df, ticker):
 
@@ -146,13 +151,16 @@ class StockData:
         df = df.sort_index()
 
         # Set instance vars relating to batch of data
-        self.stock_data.append(df)
-        self.leading_data = self.stock_data.loc[self.stock_data['Date'] <= self.start_date]
+        self.leading_data[ticker] = df.loc[df['Date'] <= self.start_date]
 
         # Keep standard start and stop indexes for all assets in portfolio
         if self.max_steps:
-            self.start_index = max(self.start_index, len(self.leading_data))
-            self.max_steps = min(self.max_steps, self.stock_data.index.size - 1)
+            self.start_index = max(self.start_index, len(self.leading_data[ticker]))
+            self.max_steps = min(self.max_steps, df.index.size - 1)
+
+        else:
+            self.start_index = len(self.leading_data[ticker])
+            self.max_steps = df.index.size - 1
 
         # Add computed values to retrieved data if included
         if self.include_ti:
@@ -163,6 +171,7 @@ class StockData:
 
         # Cache dataframe now that setup is complete
         self.yf.update_cache(df=df, start=self.start_date, end=self.end_date, ticker=ticker)
+        self.stock_data[ticker] = df
 
 
     # Defines the technical indicators to be used with data and computes / adds them
@@ -229,7 +238,8 @@ class StockData:
             start_i = key.start or 0
             end_i = key.stop or 0
             for ticker in self.stock_data:
-                retval[ticker] = self.stock_data[ticker].iloc[self.i + start_i:self.i + end_i]
+                df = self.stock_data[ticker].iloc[self.i + start_i:self.i + end_i]
+                retval[ticker] = df
         elif key is None:
             for ticker in self.stock_data:
                 retval[ticker] = self.stock_data[ticker].iloc[self.i + 0]
@@ -249,23 +259,32 @@ class StockData:
         return self.leading_data
 
 
-    def get_lead_up_period(self, start_date):
-        # Get period leading up that's half the trading period
-        m = start_date.month - (self.p_months // 2)
+    def get_last_quarter(self, target_date):
+
+        # Filter dates that are less than the target date
+        previous_dates = [date for date in self.quarters if date < target_date]
+        if not previous_dates:
+            return None
+
+        # Find the closest date by selecting the maximum of the previous dates
+        return max(previous_dates)
+
+
+    # If day isn't specified, use last day of month (based on fiscal quarters) - otherwise use day
+    def get_lead_up_period(self, start_date, day=None):
+        m = start_date.month - self.lead_period
         y = start_date.year
-        if m < 1:
+        while m < 1:
             m += 12
             y -= 1
-        _, d = calendar.monthrange(y, m)
+        d = day if day else calendar.monthrange(y, m)[1]
         lead_dt = datetime(y, m, d)
         lead_dt = self.find_next_trading_day(lead_dt)
 
         return lead_dt
 
 
-        # Calculates a valid start and end for trading period of episode
-
-
+    # Calculates a valid start and end for trading period of episode
     def get_trading_period(self, quarter):
         # Get valid start date
         st_dt = self.find_next_trading_day(quarter)
@@ -273,7 +292,7 @@ class StockData:
         # Get valid end date
         m = quarter.month + self.p_months
         y = quarter.year
-        if m > 12:
+        while m > 12:
             m -= 12
             y += 1
         _, d = calendar.monthrange(y, m)
@@ -284,9 +303,7 @@ class StockData:
         return st_dt, end_dt
 
 
-        # Finds next trading day provided a date
-
-
+    # Finds next trading day provided a date
     def find_next_trading_day(self, trading_date):
         trading_calendar = get_calendar("XNYS")
         while not trading_calendar.valid_days(
@@ -297,9 +314,7 @@ class StockData:
         return trading_date
 
 
-        # Downloads stock data and checks if it traded for defined period
-
-
+    # Downloads stock data and checks if it traded for defined period
     def get_stock_data(self, ticker, use_sp500=False):
 
         # Use custom yfinance wrapper to reduce network load
