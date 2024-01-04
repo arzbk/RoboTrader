@@ -95,6 +95,7 @@ class StockData:
         if self.fixed_portfolio and not self.stock_data:
 
             self.stock_data = {}
+            self.leading_data = {}
 
             for ticker in self.fixed_portfolio:
 

@@ -76,6 +76,7 @@ class StockMarket(gym.Env):
         )
 
         # Cost and portfolio related vars
+        self.action = {}
         self.assets = None
         self.last_close = None
         self.step_data = None
@@ -192,6 +193,7 @@ class StockMarket(gym.Env):
 
             # Vars for action - asset pair
             qty, asset = pair
+            action = qty
             qty = abs(qty)
             shares_held = self.shares_held[asset]
             current_price = self.current_price[asset]
