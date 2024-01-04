@@ -90,9 +90,9 @@ if __name__ == '__main__':
         cash=args.cash,
         max_trade_perc=args.max_trade_perc,
         include_ti=True,
-        period_months=72,
-        num_assets=5,
-        fixed_start_date=datetime(2010, 1, 1),
+        period_months=12,
+        num_assets=1,
+        fixed_portfolio=['SPY'],
         trade_cost=7.99,
         lookback_steps=lookback_steps,
         indicator_list=ti_list,
@@ -103,23 +103,8 @@ if __name__ == '__main__':
     s = train_seed
     obs = trn_env.reset(seed=train_seed)
 
-    # Get asset list from training environment
-    asset_list = trn_env.assets
-
     # Environment for testing / evaluating
-    eval_env = StockMarket(
-        cash=args.cash,
-        max_trade_perc=args.max_trade_perc,
-        include_ti=True,
-        period_months=24,
-        num_assets=5,
-        fixed_start_date=datetime(2016, 1, 1),
-        fixed_portfolio=trn_env.assets,
-        trade_cost=7.99,
-        lookback_steps=lookback_steps,
-        indicator_list=ti_list,
-        indicator_args=ti_args
-    )
+    eval_env = trn_env
 
     # Handle multi-dimensional spaces and scaling ranges
     state_dim = trn_env.observation_space.shape

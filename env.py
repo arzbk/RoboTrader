@@ -32,9 +32,6 @@ class StockMarket(gym.Env):
 
         super(StockMarket, self).__init__()
 
-        # Check assertions on params
-        assert use_sp500 or num_assets > 1, "Assert Failed: Cannot trade only SPY and have multiple assets!"
-        
         # Dynamically build action space based on number of assets
         self.action_space = spaces.Box(low=-1, high=1, shape=(num_assets,))
         

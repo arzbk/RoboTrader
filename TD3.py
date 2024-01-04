@@ -78,7 +78,7 @@ class TD3(object):
         ):
 
         # Define where the data is being processed
-        self.device = torch.device("cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using {self.device.type} for compute.")
 
         # Calculate parameter load of actions and observations
