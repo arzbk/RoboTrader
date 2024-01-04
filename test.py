@@ -6,6 +6,7 @@ import os
 import TD3
 import numpy as np
 from RLUtils import ReplayBuffer
+from datetime import datetime
 
 # Specifically for logging ML metrics
 import torch
@@ -23,10 +24,7 @@ def eval_policy(policy, eval_env, seed, render_ui=False, tb=None, eval_count=0, 
     avg_reward = 0.
     print("Evaluating Policy...")
     for i in range(eval_episodes):
-        if i == 0 and render_ui:
-            obs, done = eval_env.reset(seed=seed + i, has_ui=True), False
-        else:
-            obs, done = eval_env.reset(seed=seed + i, has_ui=False), False
+        obs, done = eval_env.reset(seed=seed + i, has_ui=False, new_dates=False, new_tickers=False), False
         while not done:
             action = policy.select_action(np.array(obs))
             obs, reward, done, _ = eval_env.step(action)
@@ -46,20 +44,20 @@ def eval_policy(policy, eval_env, seed, render_ui=False, tb=None, eval_count=0, 
 def get_random_seed():
     return round(time.time())
 
-def main():
+if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", default="TD3")                      # Policy name (TD3, DDPG or OurDDPG)
     parser.add_argument("--env", default="Base")                        # Name of environment (Base, Partial, or Full)
     parser.add_argument("--cash", default=30000)                        # Starting cash for portfolio
-    parser.add_argument("--max_trade_perc", default=0.80)               # The maximum amount of remaining cash that can be traded at once.
+    parser.add_argument("--max_trade_perc", default=0.90)               # The maximum amount of remaining cash that can be traded at once.
     parser.add_argument("--seed", default=train_seed, type=int)         # Sets Gym, PyTorch and Numpy seeds
     parser.add_argument("--start_timesteps", default=5e3, type=int)     # Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=10, type=int)            # How often (episodes) we evaluate the model
     parser.add_argument("--max_timesteps", default=1e6, type=int)       # Max GLOBAL time steps to run environment
-    parser.add_argument("--expl_noise", default=0.1, type=float)        # Std of Gaussian exploration noise
-    parser.add_argument("--batch_size", default=128, type=int)          # Batch size for both actor and critic
-    parser.add_argument("--discount", default=0.95, type=float)         # Discount factor
+    parser.add_argument("--expl_noise", default=0.25, type=float)        # Std of Gaussian exploration noise
+    parser.add_argument("--batch_size", default=256, type=int)          # Batch size for both actor and critic
+    parser.add_argument("--discount", default=0.85, type=float)         # Discount factor
     parser.add_argument("--tau", default=0.005, type=float)             # Target network update rate
     parser.add_argument("--policy_noise", default=0.1)                  # Noise added to target policy during critic update
     parser.add_argument("--noise_clip", default=0.5)                    # Range to clip target policy noise
@@ -70,7 +68,7 @@ def main():
 
     home_dir = "Z:/VSCode/DRL_Trader/"
 
-    file_name = f"{args.policy}_{args.env}_{args.seed}_0.99_Gamma"
+    file_name = f"{args.policy}_{args.env}_{args.seed}_gamma-0.85_noise=0.25"
     print("---------------------------------------")
     print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
     print("---------------------------------------")
@@ -83,15 +81,40 @@ def main():
         os.makedirs(home_dir + "models")
 
     # Initialize environment
-    lookback_steps = 14
+    lookback_steps = 20
     ti_list = ["SMA", "RSI", "EMA", "STOCH", "MACD", "ADOSC", "OBV", "ROC", "WILLR"]
     ti_args = {"RSI": {"timeperiod": lookback_steps}, "SMA": {"timeperiod": lookback_steps}, "EMA": {"timeperiod": lookback_steps}}
-    env = StockMarket(
+
+    # Environment for training...
+    trn_env = StockMarket(
         cash=args.cash,
         max_trade_perc=args.max_trade_perc,
         include_ti=True,
-        period_months=12,
-        use_sp500=True,
+        period_months=72,
+        num_assets=5,
+        fixed_start_date=datetime.datetime(2010, 1, 1),
+        trade_cost=7.99,
+        lookback_steps=lookback_steps,
+        indicator_list=ti_list,
+        indicator_args=ti_args
+    )
+
+    # Prepare environment
+    s = train_seed
+    obs = trn_env.reset(seed=train_seed)
+
+    # Get asset list from training environment
+    asset_list = trn_env.assets
+
+    # Environment for testing / evaluating
+    eval_env = StockMarket(
+        cash=args.cash,
+        max_trade_perc=args.max_trade_perc,
+        include_ti=True,
+        period_months=24,
+        num_assets=5,
+        fixed_start_date=datetime(2016, 1, 1),
+        fixed_portfolio=trn_env.assets,
         trade_cost=7.99,
         lookback_steps=lookback_steps,
         indicator_list=ti_list,
@@ -99,9 +122,9 @@ def main():
     )
 
     # Handle multi-dimensional spaces and scaling ranges
-    state_dim = env.observation_space.shape
-    action_dim = env.action_space.shape
-    dim_range = list(zip(env.action_space.low, env.action_space.high))
+    state_dim = trn_env.observation_space.shape
+    action_dim = trn_env.action_space.shape
+    dim_range = list(zip(trn_env.action_space.low, trn_env.action_space.high))
     action_range = [(float(low), float(high)) for low, high in dim_range]
 
     # Initialize the TD3 DRL Algorithm
@@ -122,6 +145,7 @@ def main():
 
     # If asked to, load weights from previous saved instance of model
     if args.load_model != "":
+        print(f"Loading model {file_name} and continuing training...")
         policy_file = file_name if args.load_model == "default" else args.load_model
         policy.load(f"./models/{policy_file}")
 
@@ -129,17 +153,13 @@ def main():
 
     # Evaluate untrained policy
     eval_num = 1
-    evaluations = [eval_policy(policy, env, eval_seed, False, tb, eval_num)]
+    evaluations = [eval_policy(policy, eval_env, eval_seed, False, tb, eval_num)]
 
     # Declare training vars
     global_t = 0
     t = 0
     episode_num = 0
     episode_reward = 0
-
-    # Prepare environment
-    s = train_seed
-    obs = env.reset(seed=train_seed)
 
     # Run complete training iterations until args.max_timesteps is crossed - at which point finish episode and end
     while (global_t < args.max_timesteps):
@@ -148,13 +168,12 @@ def main():
         action = None
         if global_t < args.start_timesteps:
 
-            action = env.action_space.sample()
+            action = trn_env.action_space.sample()
 
         else:
 
             action = policy.select_action(obs)
 
-            # Below, 1 is hardcoded as 2nd dim index as that is the HIGH boundary
             # Used to add noise to action signal - clipped within range
             for i in range(0, len(action)):
                 low, high = action_range[i]
@@ -171,7 +190,7 @@ def main():
                 action[i] = action[i].clip(low, high)
 
         # Perform action
-        obs, reward, done, _ = env.step(action)
+        obs, reward, done, _ = trn_env.step(action)
 
         # Continue on with episode - advancing t
         if not done:
@@ -182,13 +201,6 @@ def main():
             # Train agent after collecting sufficient data
             if global_t >= args.start_timesteps:
                 policy.train(replay_buffer, args.batch_size)
-
-                # Calculate trained step (global_t - args.start_timesteps)
-                train_step = global_t - args.start_timesteps
-
-                # Log actor and critic losses
-                tb.add_scalar('Actor Loss', policy.actor_loss.item(), train_step)
-                tb.add_scalar('Critic Loss', policy.critic_loss.item(), train_step)
 
             # Update counters
             t += 1
@@ -208,29 +220,16 @@ def main():
             t = 0
 
             # Render UI every fifth episode after sufficient training has occured
-            obs = env.reset(seed=s + (episode_num * 10))
+            obs = trn_env.reset(seed=s + (episode_num * 10), new_dates=False, new_tickers=False)
 
             # Evaluate every n episodes - rendering every third eval after the training has started
             if (episode_num + 1) % args.eval_freq == 0:
                 eval_num += 1
-                render_ui = True if eval_num % 3 == 0 and global_t < args.start_timesteps else False
-                evaluations.append(eval_policy(policy, env, args.seed, render_ui, tb, eval_num))
+                render_ui = False #True if eval_num % 3 == 0 and global_t < args.start_timesteps else False
+                evaluations.append(eval_policy(policy, eval_env, args.seed, render_ui, tb, eval_num))
                 np.save(home_dir + f"results/{file_name}", evaluations)
                 if args.save_model:
                     policy.save(home_dir + f"models/{file_name}")
 
         global_t += 1
 
-if __name__ == '__main__':
-    try:
-        main()
-    except Exception:
-        print('Exception - closing tensorboard stream nicely.')
-        try:
-            tb.close()
-            sys.exit(130)
-        except SystemExit:
-            tb.close()
-            os._exit(130)
-
-tb.close()

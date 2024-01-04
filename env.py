@@ -14,14 +14,16 @@ class StockMarket(gym.Env):
     def __init__(self,
                  cash=10000,
                  max_trade_perc=1.0,
-                 short_selling=True,
-                 rolling_window_size=30,
-                 period_months=6,
-                 lookback_steps=14,
+                 short_selling=False,
+                 rolling_window_size=60,
+                 period_months=24,
+                 lookback_steps=20,
+                 fixed_start_date=None,
+                 fixed_portfolio=False,
                  use_sp500=False,
                  log_transactions=False,
                  trade_cost=None,
-                 num_assets=1,
+                 num_assets=5,
                  include_ti=False,
                  indicator_list=None,
                  indicator_args={},
@@ -29,13 +31,16 @@ class StockMarket(gym.Env):
                 ):
 
         super(StockMarket, self).__init__()
+
+        # Check assertions on params
+        assert use_sp500 or num_assets > 1, "Assert Failed: Cannot trade only SPY and have multiple assets!"
         
-        # 2D Action Space - 1st D = action, 2nd D = Quantity
-        self.action_space = spaces.Box(low=np.array([0, 0]), high=np.array([3, 1]), dtype=np.float64)
+        # Dynamically build action space based on number of assets
+        self.action_space = spaces.Box(low=-1, high=1, shape=(num_assets,))
         
-        # Include last 5 observations of 5 diff values (OHLCV)
+        # Dynamically build state space based on parameters
         obs_dim_cnt = 1 + (num_assets * int(include_news)) + (num_assets * (2 + len(indicator_list)))
-        self.observation_space = spaces.Box(low=0, high=1, shape=(12,), dtype=np.float64)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(obs_dim_cnt,))
 
         self.render_mode = None
         
@@ -60,15 +65,18 @@ class StockMarket(gym.Env):
         # Instatiate StockData class
         self.data = StockData(
             filename="Stock Data/sp500_stocks.csv",
-            period_months=period_months,
             num_assets=num_assets,
+            period_months=period_months,
             use_sp500=use_sp500,
+            fixed_start_date=fixed_start_date,
+            fixed_portfolio=fixed_portfolio,
             include_ti=self.include_ti,
             indicator_list=indicator_list,
             indicator_args=indicator_args
         )
 
         # Cost and portfolio related vars
+        self.assets = None
         self.last_close = None
         self.step_data = None
         self.remaining_cash = None
@@ -79,7 +87,7 @@ class StockMarket(gym.Env):
 
         
     # Resets env and state    
-    def reset(self, seed, new_ticker=True, new_dates=True, has_ui=False):
+    def reset(self, seed, new_tickers=False, new_dates=True, has_ui=False):
 
         # Set to True if we are rendering UI for this iteration
         self.has_ui = has_ui
@@ -90,11 +98,16 @@ class StockMarket(gym.Env):
         # Reset algorithm
         self.remaining_cash = self.total_cash
         self.net_worth = self.total_cash
-        self.shares_held = 0
-        self.cost_basis = 0
+        self.shares_held = {}
+        self.cost_basis = {}
+        self.current_price = {}
 
         # Reset Stock Data
-        self.data.reset(seed, new_ticker=new_ticker, new_dates=new_dates)
+        self.assets = self.data.reset(seed, new_tickers=new_tickers, new_dates=new_dates)
+        for asset in self.assets:
+            self.shares_held[asset] = 0
+            self.cost_basis[asset] = 0
+            self.current_price[asset] = 0
 
         if self.has_ui:
 
@@ -125,104 +138,116 @@ class StockMarket(gym.Env):
         For 1 asset, and no sentiment score, this means a 13 dimensional vector
         """
 
-        # Set the current price to random price somewhere close to the close price
+        # Get random price factor and step data before proceeding
         perc_of_close = random.uniform(0.97, 1.03)
         self.step_data = self.data[0]
-        self.current_price = self.step_data['Close'] * perc_of_close
 
-        # For remaining cash, express as percentage of total portfolio value
-        rc = self.remaining_cash / self.net_worth
+        # Initialize observation (state) array to be sent to the networks
+        obs_arr = np.array()
 
-        # For shares held, express as percentage of total possible shares at today's rate
-        so = self.shares_held / (self.shares_held + (self.current_price / self.remaining_cash))
+        # Remaining cash for network to use
+        obs_arr = np.append(obs_arr, self.remaining_cash)
 
-        # Setup numpy array
-        obs_arr = np.array([rc, so])
+        for asset in self.assets:
 
-        # For close price and tech indicators, do a rolling z-score normalization
-        col_list = ['Close_delta']
-        if self.include_ti:
-            col_list += [ind + "_delta" for ind in self.data.indicator_list]
+            # Set current price for asset for this next iteration
+            self.current_price[asset] = self.step_data[asset]['Close'] * perc_of_close
 
-        for col in col_list:
-            sc = StandardScaler()
-            col_series = self.data[-self.rolling_window_size:][col]
-            shaped_series = col_series.to_numpy().reshape(-1, 1)
+            # Add price and shares held to the observation or state array
+            obs_arr = np.append(obs_arr, self.shares_held[asset])
 
-            scaled_series = sc.fit_transform(shaped_series)
-            obs_arr = np.append(obs_arr, scaled_series[-1][0])
+            """ OLD WAY FOR SHARES HELD
+            # For shares held, express as percentage of total possible shares at today's rate
+            so = self.shares_held / (self.shares_held + (self.current_price / self.remaining_cash))
+            """
+
+            # Build list of columns to use as features for state data
+            col_list = ['Close_delta']
+            if self.include_ti:
+                col_list += [ind + "_delta" for ind in self.data.indicator_list]
+
+            # Normalize and append features to observation array
+            for col in col_list:
+                sc = StandardScaler()
+                col_series = self.data[asset][-self.rolling_window_size:][col]
+                shaped_series = col_series.to_numpy().reshape(-1, 1)
+                scaled_series = sc.fit_transform(shaped_series)
+                obs_arr = np.append(obs_arr, scaled_series[-1][0])
 
         return obs_arr
 
 
     def _take_action(self, action):
 
-        # Split action tuple into discrete categorical component and continuous component
-        action_type, qty = action
+        """
+        RULE: Process SELL actions first to free up cash for rest of portfolio, followed by BUY actions from
+        largest to smallest...
+        """
+        # Pair actions with assets and split out as specified in rule
+        buy_orders = []
+        sell_orders = []
+        pairs = zip(action, self.assets)
+        ordered_pairs = sorted(pairs, key=lambda x: x[0])
+        for pair in ordered_pairs:
 
-        # Process BUY action (if cash available)
-        if action_type <= 1 and self.net_worth >= self.current_price and qty > 0:
+            # Vars for action - asset pair
+            qty, asset = pair
+            qty = abs(qty)
+            shares_held = self.shares_held[asset]
+            current_price = self.current_price[asset]
+            cost_basis = self.cost_basis[asset]
 
-            self.action = "BUY"
+            # If sell action...
+            if action < 0:
 
-            # Calculate how many shares to buy
-            total_possible = int((self.remaining_cash - self.trade_cost) / self.current_price)
-            shares_bought = int((total_possible * qty) * self.max_trade_perc)
-            prev_cost = None
-            additional_cost = None
+                self.action[asset] = "SELL"
 
-            if shares_bought > 0:
+                # Calculate how many shares to sell and update portfolio
+                shares_sold = int(shares_held * qty)
+                self.remaining_cash += ((shares_sold * current_price) - self.trade_cost)
+                shares_held -= shares_sold
 
-                # Calc and update average cost of position
-                prev_cost = self.cost_basis * self.shares_held
-                additional_cost = shares_bought * self.current_price
-                self.remaining_cash -= (additional_cost + self.trade_cost)
+                # If all shares are sold, then cost basis is reset
+                if shares_held == 0:
+                    cost_basis = 0
 
-                if (prev_cost + additional_cost) == 0 or (self.shares_held + shares_bought) == 0:
-                    raise Exception(f"""Entered Error State: Invalid cost basis (division by zero). See below:
-                    Current Price: ${self.current_price:.2f}
-                    Previous Cost: ${prev_cost:.2f}
-                    Additional Cost: ${additional_cost:.2f}
-                    Shares Held: {self.shares_held}
-                    Shares Bought: {shares_bought}""")
+            # If hold action...
+            elif action == 0:
+                self.action[asset] = "HOLD"
 
-                self.cost_basis = (
-                (prev_cost + additional_cost) / (self.shares_held + shares_bought))
+            # If buy action...
+            else:
 
-            # Update share count
-            self.shares_held += shares_bought
+                self.action[asset] = "BUY"
 
-            # Print action to log
-            if self.log_transactions:
-                print(f"- BOUGHT { shares_bought} @ ${self.current_price:.2f}/share == ${(shares_bought * self.current_price):.2f}. Net Worth == ${self.net_worth:.2f}.")
+                # Calculate how many shares to buy
+                total_possible = int((self.remaining_cash - self.trade_cost) / current_price)
+                shares_bought = int((total_possible * qty) * self.max_trade_perc)
 
-        # Process SELL action (if stock is available)
-        elif action_type <= 2:
+                prev_cost = None
+                additional_cost = None
 
-            self.action = "HOLD"
+                if shares_bought > 0:
 
-        elif self.shares_held > 0:
+                    # Calc and update average cost of position
+                    prev_cost = cost_basis * shares_held
+                    additional_cost = shares_bought * current_price
+                    self.remaining_cash -= (additional_cost + self.trade_cost)
 
-            self.action = "SELL"
+                    if (prev_cost + additional_cost) == 0 or (shares_held + shares_bought) == 0:
+                        raise Exception(f"""Entered Error State: Invalid cost basis (division by zero). See below:
+                                        Current Price: ${current_price:.2f}
+                                        Previous Cost: ${prev_cost:.2f}
+                                        Additional Cost: ${additional_cost:.2f}
+                                        Shares Held: {shares_held}
+                                        Shares Bought: {shares_bought}""")
 
-            # Calculate how many shares to sell
-            shares_sold = int(self.shares_held * qty)
+                    # Update cost basis and share count
+                    cost_basis = ((prev_cost + additional_cost) / (shares_held + shares_bought))
+                    shares_held += shares_bought
 
-            # Update portfolio
-            self.remaining_cash += ((shares_sold * self.current_price) - self.trade_cost)
-            self.shares_held -= shares_sold
-
-            # Print action to log
-            if self.log_transactions:
-                print(
-                    f"- SOLD {shares_sold} @ ${self.current_price:.2f}/share == ${(shares_sold * self.current_price):.2f}. Net Worth == ${self.net_worth:.2f}.")
-
-        # Update Net Worth for both actions above
-        self.net_worth = self.remaining_cash + self.shares_held * self.current_price
-
-        # If all shares are sold, then cost basis is reset
-        if self.shares_held == 0:
-            self.cost_basis = 0
+            # Update Net Worth for both actions above
+            self.net_worth = self.remaining_cash + (shares_held * current_price)
 
         return
 
@@ -233,7 +258,6 @@ class StockMarket(gym.Env):
         net_change = self.net_worth - prev_net
         #print(f"Net: ${self.net_worth:.2f} vs. Prev Net: ${prev_net:.2f} == reward: {str(net_change)}")
         return net_change
-
         
     
     # Process a time step in the execution of trading simulation
@@ -253,9 +277,11 @@ class StockMarket(gym.Env):
         done = (self.data.current_step + self.data.start_index + 1) == self.data.max_steps
 
         # if ui enabled, slow down processing for human eyes
+        """
         if self.has_ui:
             self.render(action=self.action)
             time.sleep(0.05)
+        """
 
         # Get next observation
         if not done:
@@ -269,6 +295,7 @@ class StockMarket(gym.Env):
             
             
     # Render the stock and trading decisions to the screen
+    #TODO: Update charting to support portfolio of assets
     def render(self, action=None):
 
         if action == "BUY":

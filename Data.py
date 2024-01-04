@@ -16,11 +16,13 @@ class StockData:
 
     def __init__(self,
                  filename="Stock Data/sp500_stocks.csv",
+                 num_assets=1,
                  use_sp500=False,
                  group_by="date",
+                 fixed_start_date=False,
+                 fixed_portfolio=None,
                  ticker_col="ticker",
                  period_months=6,
-                 num_assets=1,
                  include_ti=False,
                  lookback_window=14,
                  indicator_list=None,
@@ -36,7 +38,8 @@ class StockData:
         self.max_steps = None
 
         # Data Variables
-        self.ticker = None
+        self.fixed_start_date = fixed_start_date
+        self.fixed_portfolio = fixed_portfolio
         self.p_months = period_months
         self.num_assets = num_assets
         self.lead_date = None
@@ -60,39 +63,81 @@ class StockData:
         # Reads stocks from file
         self.stocks = self.get_tickers_from_file(self.filename, group_by, ticker_col)
         self.quarters = [key for key in list(self.stocks.keys())]
+        self.quarter = None
 
 
-    def reset(self, seed, new_ticker=False, new_dates=False):
+    def reset(self, seed, new_tickers=False, new_dates=False):
 
         random.seed(a=seed)
         self.current_step = 0
         df = None
 
-        if new_dates:
-            # Pick a random start date
-            date_idx = random.randint(0, len(self.quarters) - 1)
-            quarter = self.quarters[date_idx]
+        # Initialize or reset dates for trading
+        if self.fixed_start_date and not self.start_date:
 
             # Determine start and end date for episode
-            self.start_date, self.end_date = self.get_trading_period(quarter)
+            self.start_date, self.end_date = self.get_trading_period(self, self.fixed_start_date)
             self.lead_date = self.get_lead_up_period(self.start_date)
 
-        if self.use_sp500:
+        elif new_dates:
+
+            # Pick a random start date
+            date_idx = random.randint(0, len(self.quarters) - 1)
+            self.quarter = self.quarters[date_idx]
+
+            # Determine start and end date for episode
+            self.start_date, self.end_date = self.get_trading_period(self.quarter)
+            self.lead_date = self.get_lead_up_period(self.start_date)
+
+        # Initialize or reset stock selections and data
+        if self.fixed_portfolio and not self.stock_data:
+
+            for ticker in self.fixed_portfolio:
+
+                df = self.get_stock_data(ticker)
+                if self.is_valid_data(df):
+                    self.stock_data[ticker] = df
+
+                    # Prepare dataframe for training and testing
+                    self.preprocess_dataframe(df, ticker)
+
+                else:
+                    print(f"Warning: Stock \"{ticker}\" is invalid from {self.start_date} to {self.end_date}; skipping...")
+
+        elif self.use_sp500 and not self.stock_data:
 
             df = self.get_stock_data(self.use_sp500)
             self.ticker = "SPY"
 
-        else:
+            # Prepare dataframe for training and testing
+            self.preprocess_dataframe()
 
-            if new_ticker:
+        elif new_tickers or not self.stock_data:
 
-                # Keep picking random stocks until 1 trades for the entire year
+            self.stock_data = {}
+
+            for i in range(0, self.num_assets):
+
+                ticker = None
+
+                # Keep picking random stocks until 1 is found that satisfies criteria
                 while True:
-                    stock_idx = random.randint(0, len(self.stocks[self.quarters[date_idx]]) - 1)
-                    self.ticker = self.stocks[self.quarters[date_idx]][stock_idx]
-                    df = self.get_stock_data()
+                    stock_idx = random.randint(0, len(self.stocks[self.quarter]) - 1)
+                    ticker = self.stocks[self.quarter][stock_idx]
+                    df = self.get_stock_data(ticker)
                     if self.is_valid_data(df):
                         break
+
+                # Prepare dataframe for training and testing
+                self.preprocess_dataframe(df, ticker)
+
+        # Reset i for new episode
+        self.i = self.start_index
+
+        return list(self.stock_data.keys())
+
+
+    def preprocess_dataframe(self, df, ticker):
 
         # Split df into leading data and observed data
         df['Date'] = df.index
@@ -101,30 +146,29 @@ class StockData:
         df = df.sort_index()
 
         # Set instance vars relating to batch of data
-        self.stock_data = df
+        self.stock_data.append(df)
         self.leading_data = self.stock_data.loc[self.stock_data['Date'] <= self.start_date]
-        self.start_index = len(self.leading_data)
-        self.max_steps = self.stock_data.index.size - 1
 
-        # Reset i
-        self.i = self.start_index
+        # Keep standard start and stop indexes for all assets in portfolio
+        if self.max_steps:
+            self.start_index = max(self.start_index, len(self.leading_data))
+            self.max_steps = min(self.max_steps, self.stock_data.index.size - 1)
 
-        # Add computed values to retrieved data
+        # Add computed values to retrieved data if included
         if self.include_ti:
-            self.validate_technical_indicators()
+            self.validate_technical_indicators(df)
 
-        # Add computed delta columns (% chng between rows for each col)
-        self.validate_delta_columns()
+        # Add delta columns (% chng between rows for each col)
+        self.validate_delta_columns(df)
 
-        # Cache dataframe now that any applicable indicators have been pre-computed
-        self.yf.update_cache(df=df, start=self.start_date, end=self.end_date, ticker=self.ticker)
+        # Cache dataframe now that setup is complete
+        self.yf.update_cache(df=df, start=self.start_date, end=self.end_date, ticker=ticker)
 
 
     # Defines the technical indicators to be used with data and computes / adds them
-    def validate_technical_indicators(self):
+    def validate_technical_indicators(self, df):
 
         # Gather key data for calculations
-        df = self.stock_data
         df['Open'] = df['Open'].astype(float)
         df['Close'] = df['Close'].astype(float)
         df['High'] = df['High'].astype(float)
@@ -153,8 +197,7 @@ class StockData:
 
 
     # Dynamically check for and add missing pct change columns for each regular column
-    def validate_delta_columns(self):
-        df = self.stock_data
+    def validate_delta_columns(self, df):
 
         # Replace zeros with NaN before below operation
         df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace(0, pd.NA)
@@ -171,23 +214,30 @@ class StockData:
         df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].fillna(method='ffill')
 
 
+    def list_assets(self):
+        return list(self.stock_data.keys())
+
+
     def __len__(self):
         return self.max_steps
 
 
     # Allows subscription of the data directly from outside of the class
     def __getitem__(self, key):
-        t_df = None
+        retval = {}
         if isinstance(key, slice):
             start_i = key.start or 0
             end_i = key.stop or 0
-            t_df = self.stock_data.iloc[self.i + start_i:self.i + end_i]
+            for ticker in self.stock_data:
+                retval[ticker] = self.stock_data[ticker].iloc[self.i + start_i:self.i + end_i]
         elif key is None:
-            t_df = self.stock_data.iloc[self.i + 0]
+            for ticker in self.stock_data:
+                retval[ticker] = self.stock_data[ticker].iloc[self.i + 0]
         else:
-            t_df = self.stock_data.iloc[self.i + key]
+            for ticker in self.stock_data:
+                retval[ticker] = self.stock_data[ticker].iloc[self.i + key]
 
-        return t_df
+        return retval
 
 
     def next(self):
@@ -250,17 +300,17 @@ class StockData:
         # Downloads stock data and checks if it traded for defined period
 
 
-    def get_stock_data(self, use_sp500=False):
+    def get_stock_data(self, ticker, use_sp500=False):
 
         # Use custom yfinance wrapper to reduce network load
         if use_sp500:
             df = self.yf.download("SPY", start=self.lead_date, end=self.end_date, progress=None)
         else:
-            df = self.yf.download(self.ticker, start=self.lead_date, end=self.end_date, progress=None)
+            df = self.yf.download(ticker, start=self.lead_date, end=self.end_date, progress=None)
 
         # Ensure the stock was trading for the entire date range
         if df.empty:
-            print(f"No trading data available for {self.ticker} between {self.lead_date} and {self.end_date}")
+            print(f"No trading data available for {ticker} between {self.lead_date} and {self.end_date}")
             return None
 
         return df
