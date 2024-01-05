@@ -261,7 +261,7 @@ class StockMarket(gym.Env):
 
             # Update Net Worth for both actions above
             self.net_worth = self.remaining_cash + (shares_held * current_price)
-            self.action_counts[self.action[asset]] += 1
+            #self.action_counts[self.action[asset]] += 1
 
         return
 
