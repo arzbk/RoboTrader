@@ -13,6 +13,7 @@ class StockMarket(gym.Env):
     def __init__(self,
                  cash=10000,
                  max_trade_perc=1.0,
+                 max_drawdown=0.20,
                  short_selling=False,
                  rolling_window_size=60,
                  period_months=24,
@@ -50,6 +51,7 @@ class StockMarket(gym.Env):
         self.p_months = period_months
         self.lookback_steps = lookback_steps
         self.num_assets = num_assets
+        self.max_drawdown = max_drawdown
         self.include_ti = include_ti
         self.include_news = include_news
         self.action = None
@@ -194,7 +196,7 @@ class StockMarket(gym.Env):
             cost_basis = self.cost_basis[asset]
 
             # If sell action...
-            if action < 0:
+            if action < 0 and shares_held > 0:
 
                 self.action[asset] = "SELL"
 
@@ -203,6 +205,8 @@ class StockMarket(gym.Env):
                 self.remaining_cash += ((shares_sold * current_price) - self.trade_cost)
                 shares_held -= shares_sold
 
+                print(f"[{asset}]: {shares_sold} @ ${current_price:.2f} == {(shares_sold * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
+
                 # If all shares are sold, then cost basis is reset
                 if shares_held == 0:
                     cost_basis = 0
@@ -210,15 +214,19 @@ class StockMarket(gym.Env):
             # If hold action...
             elif action == 0:
                 self.action[asset] = "HOLD"
+                print(f"[{asset}]: Hold")
 
-            # If buy action...
-            else:
+            # If buy action (give a little wiggle room with the *2 of current price)...
+            elif self.remaining_cash > current_price * 2:
 
                 self.action[asset] = "BUY"
 
                 # Calculate how many shares to buy
-                total_possible = int((self.remaining_cash - self.trade_cost) / current_price)
-                shares_bought = int((total_possible * qty) * self.max_trade_perc)
+                capped_funds = self.max_drawdown * self.remaining_cash
+                if self.num_assets > 1:
+                    capped_funds = capped_funds * 0.75 # Only expose 75% of capped funds to allow remaining cash for other assets
+                allocated_funds = int((capped_funds - self.trade_cost) / current_price)
+                shares_bought = int(allocated_funds * qty)
 
                 prev_cost = None
                 additional_cost = None
@@ -241,6 +249,11 @@ class StockMarket(gym.Env):
                     # Update cost basis and share count
                     cost_basis = ((prev_cost + additional_cost) / (shares_held + shares_bought))
                     shares_held += shares_bought
+
+                    print(
+                        f"[{asset}]: {shares_bought} @ ${current_price:.2f} == {(shares_bought * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
+
+
 
             # Update Net Worth for both actions above
             self.net_worth = self.remaining_cash + (shares_held * current_price)
