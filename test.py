@@ -211,8 +211,8 @@ if __name__ == '__main__':
             print(f"Total T: {global_t + 1} Episode Num: {episode_num + 1} Episode T: {t + 1} Reward: {episode_reward:.3f}")
 
             # Print action counts
-            #for action in list(trn_env.action_counts.keys()):
-            #    print(f"- {action} occured {trn_env.action_counts[action]} times...")
+            for action in list(trn_env.action_counts.keys()):
+                print(f"- {action} occured {trn_env.action_counts[action]} times @ average percentage {trn_env.action_avgs[action]}...")
 
             # Log total episode reward to TensorBoard
             tb.add_scalar('Total Episode Reward', episode_reward, episode_num)

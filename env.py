@@ -33,8 +33,13 @@ class StockMarket(gym.Env):
         super(StockMarket, self).__init__()
 
         # Dynamically build action space based on number of assets
-        self.action_space = spaces.Box(low=-1, high=1, shape=(num_assets,), dtype=np.float32)
-        
+        self.action_space = spaces.Box(
+            low=np.tile(np.array([0, 0]), num_assets),
+            high=np.tile(np.array([3, 1]), num_assets),
+            shape=(2 * num_assets,),
+            dtype=np.float32
+        )
+
         # Dynamically build state space based on parameters
         obs_dim_cnt = 1 + (num_assets * int(include_news)) + (num_assets * (2 + len(indicator_list)))
         self.observation_space = spaces.Box(low=0, high=1, shape=(obs_dim_cnt,), dtype=np.float32)
@@ -85,6 +90,7 @@ class StockMarket(gym.Env):
         self.shares_held = None
         self.current_price = None
         self.action_counts = None
+        self.action_avgs = None
 
         
     # Resets env and state    
@@ -103,6 +109,7 @@ class StockMarket(gym.Env):
         self.cost_basis = {}
         self.current_price = {}
         self.action_counts = {'BUY': 0, 'HOLD': 0, 'SELL': 0}
+        self.action_avgs = {'BUY': 0, 'HOLD': 0, 'SELL': 0}
 
         # Reset Stock Data
         self.assets = self.data.reset(seed, new_tickers=new_tickers, new_dates=new_dates)
@@ -178,6 +185,9 @@ class StockMarket(gym.Env):
 
     def _take_action(self, action):
 
+        # Action needs to be reshaped from [A, B, A, B] -> [[A, B],[A, B]]
+        action = action.reshape((-1, 2))
+
         """
         RULE: Process SELL actions first to free up cash for rest of portfolio, followed by BUY actions from
         largest to smallest...
@@ -186,19 +196,19 @@ class StockMarket(gym.Env):
         buy_orders = []
         sell_orders = []
         pairs = zip(action, self.assets)
-        ordered_pairs = sorted(pairs, key=lambda x: x[0])
+        ordered_pairs = sorted(pairs, key=lambda x: x[0][0])
         for pair in ordered_pairs:
 
             # Vars for action - asset pair
-            qty, asset = pair
-            action = qty
-            qty = abs(qty)
+            action_tuple, asset = pair
+            print(asset, str(action_tuple))
+            action, qty = action_tuple
             shares_held = self.shares_held[asset]
             current_price = self.current_price[asset]
             cost_basis = self.cost_basis[asset]
 
             # If sell action...
-            if action < 0 and shares_held > 0:
+            if action <= 0.8 and shares_held > 0:
 
                 self.action[asset] = "SELL"
 
@@ -213,13 +223,8 @@ class StockMarket(gym.Env):
                 if shares_held == 0:
                     cost_basis = 0
 
-            # If hold action...
-            elif action == 0:
-                self.action[asset] = "HOLD"
-                #print(f"[{asset}]: Hold")
-
-            # If buy action (give a little wiggle room with the *2 of current price)...
-            elif self.remaining_cash > current_price * 2:
+            # If buy action...
+            elif action >= 2.2 and self.remaining_cash > current_price * 2:
 
                 self.action[asset] = "BUY"
 
@@ -251,8 +256,13 @@ class StockMarket(gym.Env):
                     # Update cost basis and share count
                     cost_basis = ((prev_cost + additional_cost) / (shares_held + shares_bought))
                     shares_held += shares_bought
-
                     #print(f"[{asset}]: {shares_bought} @ ${current_price:.2f} == {(shares_bought * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
+
+            # If hold, or failed sell/buy action...
+            else:
+
+                self.action[asset] = "HOLD"
+                # print(f"[{asset}]: Hold")
 
             # Update dictionaries
             self.shares_held[asset] = shares_held
@@ -261,7 +271,8 @@ class StockMarket(gym.Env):
 
             # Update Net Worth for both actions above
             self.net_worth = self.remaining_cash + (shares_held * current_price)
-            #self.action_counts[self.action[asset]] += 1
+            self.action_counts[self.action[asset]] += 1
+            self.action_avgs[self.action[asset]] = (((self.action_counts[self.action[asset]] - 1) * self.action_avgs[self.action[asset]]) + qty) / self.action_counts[self.action[asset]]
 
         return
 

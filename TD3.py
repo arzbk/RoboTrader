@@ -109,7 +109,8 @@ class TD3(object):
     # Generates action from actor policy given state
     def select_action(self, state):
         state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-        action = self.actor(state).cpu().data.numpy().flatten()
+        action = self.actor(state).cpu().data.numpy()
+        action = action.flatten()
 
         # Scales action to fill action space for environment
         for i in range(0, len(action)):
