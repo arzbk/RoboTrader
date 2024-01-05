@@ -17,6 +17,7 @@ class StockData:
     def __init__(self,
                  filename="Stock Data/sp500_stocks.csv",
                  num_assets=1,
+                 rolling_window_size=None,
                  use_sp500=False,
                  group_by="date",
                  fixed_start_date=False,
@@ -37,11 +38,13 @@ class StockData:
         self.i = None
         self.max_steps = None
 
+        self.rolling_window_size = rolling_window_size
+
         # Data Variables
         self.fixed_start_date = fixed_start_date
         self.fixed_portfolio = fixed_portfolio
         self.p_months = period_months
-        self.lead_period = 3 # 3 Months of data prior to observed trading period
+        self.lead_period = 6 # 3 Months of data prior to observed trading period
         self.num_assets = num_assets
         self.lead_date = None
         self.start_date = None
@@ -207,7 +210,7 @@ class StockData:
 
 
     # Dynamically check for and add missing pct change columns for each regular column
-    def validate_delta_columns(self, df):
+    def validate_delta_columns(self, df, apply_rolling_normalization=True):
 
         # Replace zeros with NaN before below operation
         df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace(0, pd.NA)
@@ -218,6 +221,12 @@ class StockData:
                 delta_col = col + "_delta"
                 if delta_col not in df.columns:
                     df[delta_col] = df[col].pct_change()
+                    if self.rolling_window_size:
+                        norm_col = col + "_norm"
+                        if norm_col not in df.columns:
+                            rolling_mean = df[delta_col].rolling(window=self.rolling_window_size).mean()
+                            rolling_std = df[delta_col].rolling(window=self.rolling_window_size).std()
+                            df[norm_col] = (df[delta_col] - rolling_mean) / rolling_std
 
         #TODO: Come up with a better more feature-wise solution to handling inf values
         df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace([np.inf, -np.inf], pd.NA)

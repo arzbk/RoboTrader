@@ -1,7 +1,6 @@
 import sys
 import gymnasium as gym
 from gym import spaces
-from sklearn.preprocessing import StandardScaler
 import numpy as np
 import random
 import time
@@ -69,7 +68,8 @@ class StockMarket(gym.Env):
             fixed_portfolio=fixed_portfolio,
             include_ti=self.include_ti,
             indicator_list=indicator_list,
-            indicator_args=indicator_args
+            indicator_args=indicator_args,
+            rolling_window_size=rolling_window_size
         )
 
         # Cost and portfolio related vars
@@ -160,17 +160,14 @@ class StockMarket(gym.Env):
             """
 
             # Build list of columns to use as features for state data
-            col_list = ['Close_delta']
+            col_list = ['Close_norm']
             if self.include_ti:
-                col_list += [ind + "_delta" for ind in self.data.indicator_list]
+                col_list += [ind + "_norm" for ind in self.data.indicator_list]
 
             # Normalize and append features to observation array
             for col in col_list:
-                sc = StandardScaler()
-                col_series = self.data[-self.rolling_window_size:][asset][col]
-                shaped_series = col_series.to_numpy().reshape(-1, 1)
-                scaled_series = sc.fit_transform(shaped_series)
-                obs_arr = np.append(obs_arr, scaled_series[-1][0])
+                col_val = self.step_data[asset][col]
+                obs_arr = np.append(obs_arr, col_val)
 
         return obs_arr
 
