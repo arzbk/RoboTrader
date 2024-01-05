@@ -7,6 +7,7 @@ import TD3
 import numpy as np
 from RLUtils import ReplayBuffer
 from datetime import datetime
+import math
 
 # Specifically for logging ML metrics
 import torch
@@ -18,6 +19,19 @@ tb = None
 # Define some fixed variables for experiments
 train_seed = 42
 eval_seed = 84
+
+# Used to periodically skew the exploration / exploitation ratio
+def compute_sine_wave(timestep, num_steps_per_cycle):
+    # Calculate the angle for the given timestep
+    angle = (2 * math.pi * timestep) / num_steps_per_cycle
+
+    # Compute the sine value for the angle
+    sine_value = math.sin(angle)
+
+    # Scale the sine value between 0 and 1
+    scaled_sine_value = (sine_value + 1) / 2
+
+    return scaled_sine_value
 
 # Runs policy for X episodes and returns average reward
 def eval_policy(policy, eval_env, seed, render_ui=False, tb=None, eval_count=0, eval_episodes=4):
@@ -55,7 +69,7 @@ if __name__ == '__main__':
     parser.add_argument("--start_timesteps", default=1e5, type=int)     # Collect 100k random samples for learning first
     parser.add_argument("--eval_freq", default=10, type=int)            # How often (episodes) we evaluate the model
     parser.add_argument("--max_timesteps", default=2e6, type=int)       # Max GLOBAL time steps to run environment
-    parser.add_argument("--expl_noise", default=0.15, type=float)        # Std of Gaussian exploration noise
+    parser.add_argument("--expl_noise", default=0.5, type=float)        # Std of Gaussian exploration noise
     parser.add_argument("--batch_size", default=256, type=int)          # Batch size for both actor and critic
     parser.add_argument("--discount", default=0.95, type=float)         # Discount factor
     parser.add_argument("--tau", default=0.005, type=float)             # Target network update rate
@@ -173,11 +187,12 @@ if __name__ == '__main__':
             action = policy.select_action(obs)
 
             # Used to add noise to action signal - clipped within range
+            periodic_entropy = compute_sine_wave(global_t, 500)
             for i in range(0, len(action)):
                 low, high = action_range[i]
                 noise = np.random.normal(
                     0,
-                    high * args.expl_noise,
+                    high * (args.expl_noise * periodic_entropy),
                     size=None
                 )
 

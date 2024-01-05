@@ -201,7 +201,6 @@ class StockMarket(gym.Env):
 
             # Vars for action - asset pair
             action_tuple, asset = pair
-            print(asset, str(action_tuple))
             action, qty = action_tuple
             shares_held = self.shares_held[asset]
             current_price = self.current_price[asset]
