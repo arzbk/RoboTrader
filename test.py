@@ -68,7 +68,7 @@ if __name__ == '__main__':
 
     home_dir = "Z:/VSCode/DRL_Trader/"
 
-    file_name = f"{args.policy}_{args.env}_{args.seed}_gamma-0.95_noise=0.15"
+    file_name = f"{args.policy}_{args.env}_{args.seed}_3Asset_test"
     print("---------------------------------------")
     print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
     print("---------------------------------------")
