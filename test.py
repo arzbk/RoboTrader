@@ -197,6 +197,10 @@ if __name__ == '__main__':
             # +1 to account for 0 indexing. +0 on ep_timesteps since it will increment +1 even if done=True
             print(f"Total T: {global_t + 1} Episode Num: {episode_num + 1} Episode T: {t + 1} Reward: {episode_reward:.3f}")
 
+            # Print action counts
+            for action in list(trn_env.action_counts.keys()):
+                print(f"- {action} occured {trn_env.action_counts[action]} times...")
+
             # Log total episode reward to TensorBoard
             tb.add_scalar('Total Episode Reward', episode_reward, episode_num)
 

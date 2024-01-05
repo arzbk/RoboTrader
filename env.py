@@ -33,11 +33,11 @@ class StockMarket(gym.Env):
         super(StockMarket, self).__init__()
 
         # Dynamically build action space based on number of assets
-        self.action_space = spaces.Box(low=-1, high=1, shape=(num_assets,))
+        self.action_space = spaces.Box(low=-1, high=1, shape=(num_assets,), dtype=np.float32)
         
         # Dynamically build state space based on parameters
         obs_dim_cnt = 1 + (num_assets * int(include_news)) + (num_assets * (2 + len(indicator_list)))
-        self.observation_space = spaces.Box(low=0, high=1, shape=(obs_dim_cnt,))
+        self.observation_space = spaces.Box(low=0, high=1, shape=(obs_dim_cnt,), dtype=np.float32)
 
         self.render_mode = None
         
@@ -84,6 +84,7 @@ class StockMarket(gym.Env):
         self.cost_basis = None
         self.shares_held = None
         self.current_price = None
+        self.action_counts = None
 
         
     # Resets env and state    
@@ -101,6 +102,7 @@ class StockMarket(gym.Env):
         self.shares_held = {}
         self.cost_basis = {}
         self.current_price = {}
+        self.action_counts = {'BUY': 0, 'HOLD': 0, 'SELL': 0}
 
         # Reset Stock Data
         self.assets = self.data.reset(seed, new_tickers=new_tickers, new_dates=new_dates)
@@ -205,7 +207,7 @@ class StockMarket(gym.Env):
                 self.remaining_cash += ((shares_sold * current_price) - self.trade_cost)
                 shares_held -= shares_sold
 
-                print(f"[{asset}]: {shares_sold} @ ${current_price:.2f} == {(shares_sold * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
+                #print(f"[{asset}]: {shares_sold} @ ${current_price:.2f} == {(shares_sold * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
 
                 # If all shares are sold, then cost basis is reset
                 if shares_held == 0:
@@ -214,7 +216,7 @@ class StockMarket(gym.Env):
             # If hold action...
             elif action == 0:
                 self.action[asset] = "HOLD"
-                print(f"[{asset}]: Hold")
+                #print(f"[{asset}]: Hold")
 
             # If buy action (give a little wiggle room with the *2 of current price)...
             elif self.remaining_cash > current_price * 2:
@@ -250,13 +252,16 @@ class StockMarket(gym.Env):
                     cost_basis = ((prev_cost + additional_cost) / (shares_held + shares_bought))
                     shares_held += shares_bought
 
-                    print(
-                        f"[{asset}]: {shares_bought} @ ${current_price:.2f} == {(shares_bought * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
+                    #print(f"[{asset}]: {shares_bought} @ ${current_price:.2f} == {(shares_bought * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
 
-
+            # Update dictionaries
+            self.shares_held[asset] = shares_held
+            self.current_price[asset] = current_price
+            self.cost_basis[asset] = cost_basis
 
             # Update Net Worth for both actions above
             self.net_worth = self.remaining_cash + (shares_held * current_price)
+            self.action_counts[self.action[asset]] += 1
 
         return
 
