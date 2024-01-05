@@ -54,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument("--seed", default=train_seed, type=int)         # Sets Gym, PyTorch and Numpy seeds
     parser.add_argument("--start_timesteps", default=1e5, type=int)     # Collect 100k random samples for learning first
     parser.add_argument("--eval_freq", default=10, type=int)            # How often (episodes) we evaluate the model
-    parser.add_argument("--max_timesteps", default=1e6, type=int)       # Max GLOBAL time steps to run environment
+    parser.add_argument("--max_timesteps", default=2e6, type=int)       # Max GLOBAL time steps to run environment
     parser.add_argument("--expl_noise", default=0.15, type=float)        # Std of Gaussian exploration noise
     parser.add_argument("--batch_size", default=256, type=int)          # Batch size for both actor and critic
     parser.add_argument("--discount", default=0.95, type=float)         # Discount factor
@@ -88,10 +88,11 @@ if __name__ == '__main__':
     # Environment for training...
     trn_env = StockMarket(
         cash=args.cash,
-        max_trade_perc=args.max_trade_perc,
+        max_trade_perc=None,
         include_ti=True,
-        period_months=12,
+        period_months=72,
         num_assets=1,
+        fixed_start_date=datetime(2010, 1, 1),
         fixed_portfolio=['SPY'],
         trade_cost=7.99,
         lookback_steps=lookback_steps,
@@ -104,7 +105,19 @@ if __name__ == '__main__':
     obs = trn_env.reset(seed=train_seed)
 
     # Environment for testing / evaluating
-    eval_env = trn_env
+    eval_env = StockMarket(
+        cash=args.cash,
+        max_trade_perc=None,
+        include_ti=True,
+        period_months=24,
+        num_assets=1,
+        fixed_start_date=datetime(2016, 1, 1),
+        fixed_portfolio=['SPY'],
+        trade_cost=7.99,
+        lookback_steps=lookback_steps,
+        indicator_list=ti_list,
+        indicator_args=ti_args
+    )
 
     # Handle multi-dimensional spaces and scaling ranges
     state_dim = trn_env.observation_space.shape
