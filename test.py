@@ -66,14 +66,14 @@ if __name__ == '__main__':
     parser.add_argument("--cash", default=30000)                        # Starting cash for portfolio
     parser.add_argument("--max_trade_perc", default=0.90)               # The maximum amount of remaining cash that can be traded at once.
     parser.add_argument("--seed", default=train_seed, type=int)         # Sets Gym, PyTorch and Numpy seeds
-    parser.add_argument("--start_timesteps", default=1e5, type=int)     # Collect 100k random samples for learning first
+    parser.add_argument("--start_timesteps", default=1e4, type=int)     # Collect 10k random samples for learning first
     parser.add_argument("--eval_freq", default=10, type=int)            # How often (episodes) we evaluate the model
     parser.add_argument("--max_timesteps", default=2e6, type=int)       # Max GLOBAL time steps to run environment
-    parser.add_argument("--expl_noise", default=0.5, type=float)        # Std of Gaussian exploration noise
+    parser.add_argument("--expl_noise", default=0.3, type=float)        # Std of Gaussian exploration noise
     parser.add_argument("--batch_size", default=256, type=int)          # Batch size for both actor and critic
     parser.add_argument("--discount", default=0.95, type=float)         # Discount factor
-    parser.add_argument("--tau", default=0.005, type=float)             # Target network update rate
-    parser.add_argument("--policy_noise", default=0.1)                  # Noise added to target policy during critic update
+    parser.add_argument("--tau", default=0.0025, type=float)            # Target network update rate
+    parser.add_argument("--policy_noise", default=0.2)                  # Noise added to target policy during critic update
     parser.add_argument("--noise_clip", default=0.5)                    # Range to clip target policy noise
     parser.add_argument("--policy_freq", default=2, type=int)           # Frequency of delayed policy updates
     parser.add_argument("--save_model", default=True)                   # Save model and optimizer parameters
@@ -187,7 +187,7 @@ if __name__ == '__main__':
             action = policy.select_action(obs)
 
             # Used to add noise to action signal - clipped within range
-            periodic_entropy = compute_sine_wave(global_t, 500)
+            periodic_entropy = compute_sine_wave(global_t, 100)
             for i in range(0, len(action)):
                 low, high = action_range[i]
                 noise = np.random.normal(
