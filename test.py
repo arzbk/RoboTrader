@@ -1,5 +1,6 @@
 import sys
 from env import StockMarket
+from datetime import datetime
 import argparse
 import time
 import os
@@ -52,13 +53,13 @@ if __name__ == '__main__':
     parser.add_argument("--cash", default=30000)                        # Starting cash for portfolio
     parser.add_argument("--max_trade_perc", default=0.90)               # The maximum amount of remaining cash that can be traded at once.
     parser.add_argument("--seed", default=train_seed, type=int)         # Sets Gym, PyTorch and Numpy seeds
-    parser.add_argument("--start_timesteps", default=1e5, type=int)     # Collect 100k random samples for learning first
+    parser.add_argument("--start_timesteps", default=1e4, type=int)     # Collect 100k random samples for learning first
     parser.add_argument("--eval_freq", default=10, type=int)            # How often (episodes) we evaluate the model
     parser.add_argument("--max_timesteps", default=2e6, type=int)       # Max GLOBAL time steps to run environment
-    parser.add_argument("--expl_noise", default=0.15, type=float)        # Std of Gaussian exploration noise
+    parser.add_argument("--expl_noise", default=0.1, type=float)        # Std of Gaussian exploration noise
     parser.add_argument("--batch_size", default=256, type=int)          # Batch size for both actor and critic
-    parser.add_argument("--discount", default=0.95, type=float)         # Discount factor
-    parser.add_argument("--tau", default=0.005, type=float)             # Target network update rate
+    parser.add_argument("--discount", default=0.99, type=float)         # Discount factor
+    parser.add_argument("--tau", default=0.0005, type=float)             # Target network update rate changed from 0.005 to 0.010
     parser.add_argument("--policy_noise", default=0.1)                  # Noise added to target policy during critic update
     parser.add_argument("--noise_clip", default=0.5)                    # Range to clip target policy noise
     parser.add_argument("--policy_freq", default=2, type=int)           # Frequency of delayed policy updates
@@ -68,7 +69,7 @@ if __name__ == '__main__':
 
     home_dir = "Z:/VSCode/DRL_Trader/"
 
-    file_name = f"{args.policy}_{args.env}_{args.seed}_gamma-0.95_noise=0.15"
+    file_name = f"RoboTrader"
     print("---------------------------------------")
     print(f"Policy: {args.policy}, Env: {args.env}, Seed: {args.seed}")
     print("---------------------------------------")
@@ -147,7 +148,9 @@ if __name__ == '__main__':
         policy_file = file_name if args.load_model == "default" else args.load_model
         policy.load(f"./models/{policy_file}")
 
-    tb = SummaryWriter(f'logs/{file_name}')  # You can choose any directory for your logs
+    if os.path.exists(f'tensorboard/{file_name}'):
+        os.remove(f'tensorboard/{file_name}')
+    tb = SummaryWriter(f'tensorboard/{file_name}')  # You can choose any directory for your logs
 
     # Evaluate untrained policy
     eval_num = 1
@@ -164,28 +167,25 @@ if __name__ == '__main__':
 
         # Select action randomly or according to policy
         action = None
-        if global_t < args.start_timesteps:
+        if global_t < args.start_timesteps:# or global_t % 10 == 0:
 
             action = trn_env.action_space.sample()
 
         else:
-
             action = policy.select_action(obs)
 
             # Used to add noise to action signal - clipped within range
-            for i in range(0, len(action)):
-                low, high = action_range[i]
-                noise = np.random.normal(
+            noise = np.random.normal(
                     0,
-                    high * args.expl_noise,
-                    size=None
-                )
+                    trn_env.action_space.high * args.expl_noise,
+                    size=action_dim
+            )
+            action = (
+                    action + noise
+            ).clip(trn_env.action_space.low, trn_env.action_space.high)
 
-                # Log total episode reward to TensorBoard
-                tb.add_scalar('Exploration Noise', noise, global_t)
-
-                action[i] += noise
-                action[i] = action[i].clip(low, high)
+            # Log total episode reward to TensorBoard
+            #tb.add_scalar('Exploration Noise', noise, global_t)
 
         # Perform action
         obs, reward, done, _ = trn_env.step(action)

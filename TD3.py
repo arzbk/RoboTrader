@@ -126,7 +126,6 @@ class TD3(object):
         reshaped_arrays = []
         for arr in arrays[0]:
 
-
             # Get the size of the first dimension (batch size)
             batch_size = arr.shape[0]
 

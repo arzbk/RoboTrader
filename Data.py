@@ -210,10 +210,10 @@ class StockData:
 
 
     # Dynamically check for and add missing pct change columns for each regular column
-    def validate_delta_columns(self, df, apply_rolling_normalization=True):
+    def validate_delta_columns(self, df):
 
         # Replace zeros with NaN before below operation
-        df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace(0, pd.NA)
+        #df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace(0, pd.NA)
 
         # For each column that is not a delta column, and not date or datetime
         for col in filter(lambda s: "_delta" not in s, df.columns):
@@ -229,8 +229,8 @@ class StockData:
                             df[norm_col] = (df[delta_col] - rolling_mean) / rolling_std
 
         #TODO: Come up with a better more feature-wise solution to handling inf values
-        df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace([np.inf, -np.inf], pd.NA)
-        df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].fillna(method='ffill')
+        #df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace([np.inf, -np.inf], pd.NA)
+        #df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].fillna(method='ffill')
 
 
     def list_assets(self):

@@ -1,6 +1,5 @@
 import sys
 import gymnasium as gym
-from gym import spaces
 import numpy as np
 import random
 import time
@@ -33,7 +32,7 @@ class StockMarket(gym.Env):
         super(StockMarket, self).__init__()
 
         # Dynamically build action space based on number of assets
-        self.action_space = spaces.Box(
+        self.action_space = gym.spaces.Box(
             low=np.tile(np.array([0, 0]), num_assets),
             high=np.tile(np.array([3, 1]), num_assets),
             shape=(2 * num_assets,),
@@ -41,8 +40,8 @@ class StockMarket(gym.Env):
         )
 
         # Dynamically build state space based on parameters
-        obs_dim_cnt = 1 + (num_assets * int(include_news)) + (num_assets * (2 + len(indicator_list)))
-        self.observation_space = spaces.Box(low=0, high=1, shape=(obs_dim_cnt,), dtype=np.float32)
+        obs_dim_cnt = 1 + (num_assets * int(include_news)) + (num_assets * (2 + (int(include_ti)*len(indicator_list))))
+        self.observation_space = gym.spaces.Box(low=0, high=1, shape=(obs_dim_cnt,), dtype=np.float32)
 
         self.render_mode = None
         
@@ -86,6 +85,7 @@ class StockMarket(gym.Env):
         self.step_data = None
         self.remaining_cash = None
         self.net_worth = None
+        self.current_reward = None
         self.cost_basis = None
         self.shares_held = None
         self.current_price = None
@@ -94,7 +94,17 @@ class StockMarket(gym.Env):
 
         
     # Resets env and state    
-    def reset(self, seed, new_tickers=False, new_dates=True, has_ui=False):
+    def reset(self, seed, **options):
+
+        new_tickers = False
+        new_dates = True
+        has_ui = False
+        if 'new_tickers' in list(options.keys()):
+            new_tickers = options['new_tickers']
+        elif 'new_dates' in list(options.keys()):
+            new_dates = options['new_dates']
+        elif 'has_ui' in list(options.keys()):
+            has_ui = options['has_ui']
 
         # Set to True if we are rendering UI for this iteration
         self.has_ui = has_ui
@@ -104,6 +114,7 @@ class StockMarket(gym.Env):
 
         # Reset algorithm
         self.remaining_cash = self.total_cash
+        self.current_reward = 0
         self.net_worth = self.total_cash
         self.shares_held = {}
         self.cost_basis = {}
@@ -128,7 +139,7 @@ class StockMarket(gym.Env):
             self.chart.hide()
 
         # Make first observation
-        return self._next_observation()
+        return self._next_observation(), {}
 
     
     # Used to prepare and package the next group of observations for the algo
@@ -155,7 +166,7 @@ class StockMarket(gym.Env):
         obs_arr = np.array([])
 
         # Remaining cash for network to use
-        obs_arr = np.append(obs_arr, self.remaining_cash)
+        obs_arr = np.append(obs_arr, self.remaining_cash / self.net_worth)
 
         for asset in self.assets:
 
@@ -163,7 +174,8 @@ class StockMarket(gym.Env):
             self.current_price[asset] = self.step_data[asset]['Close'] * perc_of_close
 
             # Add price and shares held to the observation or state array
-            obs_arr = np.append(obs_arr, self.shares_held[asset])
+            total_possible_shares = (self.remaining_cash / self.current_price[asset]) + self.shares_held[asset]
+            obs_arr = np.append(obs_arr, self.shares_held[asset] / total_possible_shares)
 
             """ OLD WAY FOR SHARES HELD
             # For shares held, express as percentage of total possible shares at today's rate
@@ -201,7 +213,7 @@ class StockMarket(gym.Env):
 
             # Vars for action - asset pair
             action_tuple, asset = pair
-            print(asset, str(action_tuple))
+            #print(asset, str(action_tuple))
             action, qty = action_tuple
             shares_held = self.shares_held[asset]
             current_price = self.current_price[asset]
@@ -214,7 +226,10 @@ class StockMarket(gym.Env):
 
                 # Calculate how many shares to sell and update portfolio
                 shares_sold = int(shares_held * qty)
-                self.remaining_cash += ((shares_sold * current_price) - self.trade_cost)
+                share_avg_cost = shares_sold * cost_basis
+                share_value = shares_sold * current_price
+                #self.current_reward += (share_value - share_avg_cost - self.trade_cost)
+                self.remaining_cash += (share_value - self.trade_cost)
                 shares_held -= shares_sold
 
                 #print(f"[{asset}]: {shares_sold} @ ${current_price:.2f} == {(shares_sold * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
@@ -277,25 +292,26 @@ class StockMarket(gym.Env):
         return
 
 
-    def calculate_reward(self, prev_net):
+    def calculate_reward(self, prev_reward):
 
         # Calculate difference in net worth from t-1 to t
-        net_change = self.net_worth - prev_net
+        net_reward = self.net_worth - prev_reward / prev_reward
         #print(f"Net: ${self.net_worth:.2f} vs. Prev Net: ${prev_net:.2f} == reward: {str(net_change)}")
-        return net_change
+        return net_reward
         
     
     # Process a time step in the execution of trading simulation
     def step(self, action):
 
         # Get net_worth before action as portfolio value @ t - 1
-        prev_net = self.net_worth
+        prev_reward = self.net_worth
 
         # Execute one time step within the environment
         self._take_action(action)
 
         # Calculate reward for action
-        reward = self.calculate_reward(prev_net)
+        reward = self.calculate_reward(prev_reward)
+        self.current_reward = 0
 
         # Conditions for ending the training episode
         obs = None
@@ -316,7 +332,13 @@ class StockMarket(gym.Env):
 
             obs = self._next_observation()
 
-        return obs, reward, done, {}
+        # Add info for tensorboard and debugging
+        info = {
+            'action_counts': self.action_counts,
+            'action_avgs': self.action_avgs
+        }
+
+        return obs, reward, done, {}, info
             
             
     # Render the stock and trading decisions to the screen
