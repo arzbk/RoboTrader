@@ -12,16 +12,17 @@ class StockMarket(gym.Env):
     def __init__(self,
                  cash=10000,
                  max_trade_perc=1.0,
-                 max_drawdown=0.20,
+                 max_drawdown=0.30,
                  short_selling=False,
                  rolling_window_size=60,
                  period_months=24,
                  lookback_steps=20,
                  fixed_start_date=None,
                  fixed_portfolio=False,
-                 use_sp500=False,
-                 log_transactions=False,
-                 trade_cost=None,
+                 use_fixed_trade_cost=False,
+                 fixed_trade_cost=None,
+                 perc_trade_cost=None,
+                 holding_cost=None,
                  num_assets=5,
                  include_ti=False,
                  indicator_list=None,
@@ -50,7 +51,9 @@ class StockMarket(gym.Env):
         self.chart = StockChart(toolbox=False, include_table=True, table_cols=['Cash', 'Shares', 'Value', 'Net'])
 
         # Variables that define how the training/observations will work
-        self.trade_cost = trade_cost if trade_cost else 0
+        self.trade_cost = fixed_trade_cost if use_fixed_trade_cost else None
+        self.perc_trade_cost = perc_trade_cost if not use_fixed_trade_cost else None
+        assert not fixed_trade_cost and perc_trade_cost, "Error: Can't have both fixed and percentage trade cost"
         self.total_cash = cash
         self.p_months = period_months
         self.lookback_steps = lookback_steps
@@ -58,18 +61,16 @@ class StockMarket(gym.Env):
         self.max_drawdown = max_drawdown
         self.include_ti = include_ti
         self.include_news = include_news
-        self.action = None
         self.max_trade_perc = max_trade_perc
         self.short_selling = short_selling
         self.rolling_window_size = rolling_window_size
-        self.log_transactions = log_transactions
+        self.holding_cost = holding_cost
 
         # Instatiate StockData class
         self.data = StockData(
             filename="Stock Data/sp500_stocks.csv",
             num_assets=num_assets,
             period_months=period_months,
-            use_sp500=use_sp500,
             fixed_start_date=fixed_start_date,
             fixed_portfolio=fixed_portfolio,
             include_ti=self.include_ti,
@@ -87,6 +88,7 @@ class StockMarket(gym.Env):
         self.net_worth = None
         self.current_reward = None
         self.cost_basis = None
+        self.hold_penalty = None
         self.shares_held = None
         self.current_price = None
         self.action_counts = None
@@ -118,6 +120,7 @@ class StockMarket(gym.Env):
         self.net_worth = self.total_cash
         self.shares_held = {}
         self.cost_basis = {}
+        self.hold_penalty = {}
         self.current_price = {}
         self.action_counts = {'BUY': 0, 'HOLD': 0, 'SELL': 0}
         self.action_avgs = {'BUY': 0, 'HOLD': 0, 'SELL': 0}
@@ -127,6 +130,7 @@ class StockMarket(gym.Env):
         for asset in self.assets:
             self.shares_held[asset] = 0
             self.cost_basis[asset] = 0
+            self.hold_penalty[asset] = 0
             self.current_price[asset] = 0
 
         if self.has_ui:
@@ -200,6 +204,10 @@ class StockMarket(gym.Env):
         # Action needs to be reshaped from [A, B, A, B] -> [[A, B],[A, B]]
         action = action.reshape((-1, 2))
 
+        # Build net worth and reward iteratively for portfolio on each step
+        self.net_worth = 0
+        self.current_reward = 0
+
         """
         RULE: Process SELL actions first to free up cash for rest of portfolio, followed by BUY actions from
         largest to smallest...
@@ -213,14 +221,13 @@ class StockMarket(gym.Env):
 
             # Vars for action - asset pair
             action_tuple, asset = pair
-            #print(asset, str(action_tuple))
             action, qty = action_tuple
             shares_held = self.shares_held[asset]
             current_price = self.current_price[asset]
             cost_basis = self.cost_basis[asset]
 
             # If sell action...
-            if action <= 0.8 and shares_held > 0:
+            if action <= 0.75 and shares_held > 0:
 
                 self.action[asset] = "SELL"
 
@@ -230,16 +237,25 @@ class StockMarket(gym.Env):
                 share_value = shares_sold * current_price
                 #self.current_reward += (share_value - share_avg_cost - self.trade_cost)
                 self.remaining_cash += (share_value - self.trade_cost)
+
+                # Calculate hold penalty
+                prev_penalty = self.hold_penalty[asset]  # Last part reduces total penalty by sale perc
+                self.hold_penalty[asset] = (shares_held * self.holding_cost + prev_penalty) * (1 - qty)
+
                 shares_held -= shares_sold
+                total_asset_value = shares_held * current_price
+                self.net_worth += total_asset_value
+                self.current_reward += total_asset_value * (1 - self.hold_penalty[asset])
 
                 #print(f"[{asset}]: {shares_sold} @ ${current_price:.2f} == {(shares_sold * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
 
                 # If all shares are sold, then cost basis is reset
                 if shares_held == 0:
                     cost_basis = 0
+                    self.hold_penalty[asset] = 0
 
             # If buy action...
-            elif action >= 2.2 and self.remaining_cash > current_price * 2:
+            elif action >= 2.25 and self.remaining_cash > current_price * 2:
 
                 self.action[asset] = "BUY"
 
@@ -268,9 +284,15 @@ class StockMarket(gym.Env):
                                         Shares Held: {shares_held}
                                         Shares Bought: {shares_bought}""")
 
+                    # Calculate hold penalty
+                    self.hold_penalty[asset] += shares_held * self.holding_cost
+
                     # Update cost basis and share count
                     cost_basis = ((prev_cost + additional_cost) / (shares_held + shares_bought))
                     shares_held += shares_bought
+                    total_asset_value = shares_held * current_price
+                    self.net_worth += total_asset_value
+                    self.current_reward += total_asset_value * (1 - self.hold_penalty[asset])
                     #print(f"[{asset}]: {shares_bought} @ ${current_price:.2f} == {(shares_bought * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
 
             # If hold, or failed sell/buy action...
@@ -279,13 +301,18 @@ class StockMarket(gym.Env):
                 self.action[asset] = "HOLD"
                 # print(f"[{asset}]: Hold")
 
+                self.hold_penalty[asset] += shares_held * self.holding_cost
+                total_asset_value = shares_held * current_price
+                self.current_reward += total_asset_value * (1 - self.hold_penalty[asset])
+
             # Update dictionaries
             self.shares_held[asset] = shares_held
             self.current_price[asset] = current_price
             self.cost_basis[asset] = cost_basis
 
             # Update Net Worth for both actions above
-            self.net_worth = self.remaining_cash + (shares_held * current_price)
+            self.net_worth += self.remaining_cash
+            self.current_reward += self.remaining_cash
             self.action_counts[self.action[asset]] += 1
             self.action_avgs[self.action[asset]] = (((self.action_counts[self.action[asset]] - 1) * self.action_avgs[self.action[asset]]) + qty) / self.action_counts[self.action[asset]]
 
@@ -294,9 +321,7 @@ class StockMarket(gym.Env):
 
     def calculate_reward(self, prev_reward):
 
-        # Calculate difference in net worth from t-1 to t
-        net_reward = self.net_worth - prev_reward / prev_reward
-        #print(f"Net: ${self.net_worth:.2f} vs. Prev Net: ${prev_net:.2f} == reward: {str(net_change)}")
+        net_reward = self.current_reward - prev_reward
         return net_reward
         
     
@@ -304,14 +329,13 @@ class StockMarket(gym.Env):
     def step(self, action):
 
         # Get net_worth before action as portfolio value @ t - 1
-        prev_reward = self.net_worth
+        prev_reward = self.current_reward
 
         # Execute one time step within the environment
         self._take_action(action)
 
         # Calculate reward for action
         reward = self.calculate_reward(prev_reward)
-        self.current_reward = 0
 
         # Conditions for ending the training episode
         obs = None
@@ -329,17 +353,16 @@ class StockMarket(gym.Env):
 
             # Go to next step
             self.data.next()
-
             obs = self._next_observation()
 
         # Add info for tensorboard and debugging
         info = {
             'action_counts': self.action_counts,
-            'action_avgs': self.action_avgs
+            'action_avgs': self.action_avgs,
+            'net_worth': self.net_worth
         }
 
         return obs, reward, done, {}, info
-            
             
     # Render the stock and trading decisions to the screen
     #TODO: Update charting to support portfolio of assets

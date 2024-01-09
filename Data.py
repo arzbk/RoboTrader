@@ -18,7 +18,6 @@ class StockData:
                  filename="Stock Data/sp500_stocks.csv",
                  num_assets=1,
                  rolling_window_size=None,
-                 use_sp500=False,
                  group_by="date",
                  fixed_start_date=False,
                  fixed_portfolio=None,
@@ -60,9 +59,6 @@ class StockData:
 
         # Instantiate yfinance wrapper for cache handling
         self.yf = YFinanceCache("yfinance_cache")
-
-        # Set to True if only using SP500 index
-        self.use_sp500 = use_sp500
 
         # Reads stocks from file
         self.stocks = self.get_tickers_from_file(self.filename, group_by, ticker_col)
@@ -111,14 +107,6 @@ class StockData:
 
                 else:
                     print(f"Warning: Stock \"{ticker}\" is invalid from {self.start_date} to {self.end_date}; skipping...")
-
-        elif self.use_sp500 and not self.stock_data:
-
-            df = self.get_stock_data(self.use_sp500)
-            self.ticker = "SPY"
-
-            # Prepare dataframe for training and testing
-            self.preprocess_dataframe()
 
         elif new_tickers or not self.stock_data:
 

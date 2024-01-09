@@ -52,13 +52,13 @@ class Args:
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
-    tau: float = 0.003
+    tau: float = 0.005
     """target smoothing coefficient (default: 0.005)"""
     batch_size: int = 256
     """the batch size of sample from the reply memory"""
-    policy_noise: float = 0.15
+    policy_noise: float = 0.10
     """the scale of policy noise"""
-    exploration_noise: float = 0.15
+    exploration_noise: float = 0.20
     """the scale of exploration noise"""
     learning_starts: int = 10e3
     """timestep to start learning"""
@@ -277,14 +277,22 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
 
                 # Log actions taken by network
-                writer.add_scalar("action/BUY", info['action_counts']["BUY"], global_step)
-                writer.add_scalar("action/SELL", info['action_counts']["SELL"], global_step)
-                writer.add_scalar("action/HOLD", info['action_counts']["HOLD"], global_step)
+                writer.add_scalars(f"Action/Type", {
+                    "BUY": info['action_counts']["BUY"],
+                    "SELL": info['action_counts']["SELL"],
+                    "HOLD": info['action_counts']["HOLD"]
+                }, global_step)
 
-                # Log magnitude of the actions taken
-                writer.add_scalar("qty/BUY", info['action_avgs']["BUY"], global_step)
-                writer.add_scalar("qty/SELL", info['action_avgs']["SELL"], global_step)
-                writer.add_scalar("qty/HOLD", info['action_avgs']["HOLD"], global_step)
+                # Log net worth over time
+                writer.add_scalar(f"Action/NetWorth", info['net_worth'], global_step)
+
+                # Log action quantities taken by network
+                writer.add_scalars(f"Action/Quantity", {
+                    "BUY": info['action_avgs']["BUY"],
+                    "SELL": info['action_avgs']["SELL"],
+                    "HOLD": info['action_avgs']["HOLD"]
+                }, global_step)
+
                 break
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
