@@ -318,11 +318,6 @@ def run():
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
 
         else:
-
-            # Enable batch norm learning
-            p.actor.switch_to_train_mode()
-            p.target_actor.switch_to_train_mode()
-
             actions = p.get_actions(obs)
 
         # TRY NOT TO MODIFY: execute the game and log data.
@@ -387,11 +382,6 @@ def run():
                 writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
         if global_step % 20000 == 0 and global_step >= Algorithm.learning_starts:
-
-            # Enable batch norm learning
-            p.actor.switch_to_eval_mode()
-            p.target_actor.switch_to_eval_mode()
-
             logging.info(f"===== EVAL MODEL STARTED =====")
 
             # Eval policy on unseen data / date-range
