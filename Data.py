@@ -20,6 +20,8 @@ class StockData:
                  rolling_window_size=None,
                  group_by="date",
                  fixed_start_date=False,
+                 range_start_date=None,
+                 range_end_date=None,
                  fixed_portfolio=None,
                  ticker_col="ticker",
                  period_months=6,
@@ -41,6 +43,8 @@ class StockData:
 
         # Data Variables
         self.fixed_start_date = fixed_start_date
+        self.range_start_date = range_start_date
+        self.range_end_date = range_end_date
         self.fixed_portfolio = fixed_portfolio
         self.p_months = period_months
         self.lead_period = 6 # 3 Months of data prior to observed trading period
@@ -64,6 +68,14 @@ class StockData:
         self.stocks = self.get_tickers_from_file(self.filename, group_by, ticker_col)
         self.quarters = [key for key in list(self.stocks.keys())]
         self.quarter = None
+
+        # Apply optional start and end range to random dates
+        f_start = self.range_start_date or datetime(2000, 1, 1)
+        if self.range_end_date:
+            f_end = self.get_lead_up_period(self.range_end_date, months=period_months)
+        else:
+            f_end = datetime(2200, 1, 1)
+        self.quarters = list(filter(lambda x: f_start <= x <= f_end, self.quarters))
 
 
     def reset(self, seed, new_tickers=False, new_dates=False):
@@ -132,6 +144,8 @@ class StockData:
         # Reset i for new episode
         self.i = self.start_index
 
+        print("----START INDEX: "+str(self.i))
+
         return list(self.stock_data.keys())
 
     def preprocess_dataframe(self, df, ticker):
@@ -169,12 +183,26 @@ class StockData:
     # Defines the technical indicators to be used with data and computes / adds them
     def validate_technical_indicators(self, df):
 
+        """BELOW CODE ENSURES NO DIVISIONS BY ZERO WHILE KEEPING SIGNAL QUALITY OF INDICATORS
+        - epsilon adds an extremely small amount of unique variance to every row
+        epsilon = 1e-20
+        num_cols = 5
+        df_len = len(df.index)
+        e_open = epsilon * pd.Series(range(1, df_len * num_cols, 5), dtype=float)
+        e_close = epsilon * pd.Series(range(2, df_len * num_cols, 5), dtype=float)
+        e_high = epsilon * pd.Series(range(3, df_len * num_cols, 5), dtype=float)
+        e_low = epsilon * pd.Series(range(4, df_len * num_cols, 5), dtype=float)
+        e_volume = epsilon * pd.Series(range(5, df_len * num_cols, 5), dtype=float)
+        """
+
         # Gather key data for calculations
-        df['Open'] = df['Open'].astype(float)
-        df['Close'] = df['Close'].astype(float)
-        df['High'] = df['High'].astype(float)
-        df['Low'] = df['Low'].astype(float)
-        df['Volume'] = df['Volume'].astype(float)
+        df['Open'] = df['Open'].astype(float)# + e_open
+        df['Close'] = df['Close'].astype(float)# + e_close
+        df['High'] = df['High'].astype(float)# + e_high
+        df['Low'] = df['Low'].astype(float)# + e_low
+        df['Volume'] = df['Volume'].astype(float)# + e_volume
+
+        # Apply unique, incrementing epsilon to each column so that no zero division ever occurs
 
         # Dynamically check for and add missing indicators to dataset
         for ind in self.indicator_list:
@@ -190,9 +218,8 @@ class StockData:
                     if type(res) == pd.DataFrame:
                         res = res[res.columns[0]]
                 else:
-                    print(f"Warning: An indicator that was specified doesn't exist in the TA-Lib Python library (\"{ind}\").\nContinuing without it.")
-                    self.indicator_list.remove(ind)
-                    self.indicator_args.pop(ind)
+                    raise Exception(f"Error: An indicator that was specified doesn't exist in the TA-Lib Python library.")
+
 
                 df[ind] = res
 
@@ -211,10 +238,19 @@ class StockData:
                     df[delta_col] = df[col].pct_change()
                     if self.rolling_window_size:
                         norm_col = col + "_norm"
+                        scaled_col = col + "_scaled"
                         if norm_col not in df.columns:
+
+                            # Apply rolling normalization
                             rolling_mean = df[delta_col].rolling(window=self.rolling_window_size).mean()
                             rolling_std = df[delta_col].rolling(window=self.rolling_window_size).std()
                             df[norm_col] = (df[delta_col] - rolling_mean) / rolling_std
+
+                            # Apply min-max scaling to entire column
+                            min_value = df[norm_col].min()
+                            max_value = df[norm_col].max()
+                            df[scaled_col] = (df[norm_col] - min_value) / (max_value - min_value)
+
 
         #TODO: Come up with a better more feature-wise solution to handling inf values
         #df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace([np.inf, -np.inf], pd.NA)
@@ -269,8 +305,9 @@ class StockData:
 
 
     # If day isn't specified, use last day of month (based on fiscal quarters) - otherwise use day
-    def get_lead_up_period(self, start_date, day=None):
-        m = start_date.month - self.lead_period
+    def get_lead_up_period(self, start_date, day=None, months=None):
+        sub_months = self.lead_period if not months else months
+        m = start_date.month - sub_months
         y = start_date.year
         while m < 1:
             m += 12

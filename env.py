@@ -6,23 +6,31 @@ import time
 from Data import StockData
 from Graphics import StockChart
 import pandas as pd
+import logging
+
+# Configure Numpy to throw divide by zero as exception and halt program
+np.seterr(all='raise')
+
+# Iterate through MatPlotLib backends
 
 class StockMarket(gym.Env):
 
     def __init__(self,
                  cash=10000,
-                 max_trade_perc=1.0,
-                 max_drawdown=0.30,
+                 max_trade_perc=0.5,
+                 max_drawdown=0.95,
                  short_selling=False,
-                 rolling_window_size=60,
+                 rolling_window_size=30,
                  period_months=24,
                  lookback_steps=20,
                  fixed_start_date=None,
+                 range_start_date=None,
+                 range_end_date=None,
                  fixed_portfolio=False,
                  use_fixed_trade_cost=False,
                  fixed_trade_cost=None,
                  perc_trade_cost=None,
-                 holding_cost=None,
+                 holding_cost=0.02, # 2% reduction from unrealized asset value every time step - compounding
                  num_assets=5,
                  include_ti=False,
                  indicator_list=None,
@@ -45,20 +53,19 @@ class StockMarket(gym.Env):
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=(obs_dim_cnt,), dtype=np.float32)
 
         self.render_mode = None
-        
+
         # Intialize a live charting display for human feedback
         self.has_ui = False
         self.chart = StockChart(toolbox=False, include_table=True, table_cols=['Cash', 'Shares', 'Value', 'Net'])
 
         # Variables that define how the training/observations will work
-        self.trade_cost = fixed_trade_cost if use_fixed_trade_cost else None
-        self.perc_trade_cost = perc_trade_cost if not use_fixed_trade_cost else None
-        assert not fixed_trade_cost and perc_trade_cost, "Error: Can't have both fixed and percentage trade cost"
+        self.use_fixed_trade_cost = use_fixed_trade_cost
+        self.trade_cost = fixed_trade_cost
+        self.perc_trade_cost = perc_trade_cost
         self.total_cash = cash
         self.p_months = period_months
         self.lookback_steps = lookback_steps
-        self.num_assets = num_assets
-        self.max_drawdown = max_drawdown
+        self.num_assets = num_assets or len(fixed_portfolio)
         self.include_ti = include_ti
         self.include_news = include_news
         self.max_trade_perc = max_trade_perc
@@ -69,9 +76,11 @@ class StockMarket(gym.Env):
         # Instatiate StockData class
         self.data = StockData(
             filename="Stock Data/sp500_stocks.csv",
-            num_assets=num_assets,
+            num_assets=self.num_assets,
             period_months=period_months,
             fixed_start_date=fixed_start_date,
+            range_start_date=range_start_date,
+            range_end_date=range_end_date,
             fixed_portfolio=fixed_portfolio,
             include_ti=self.include_ti,
             indicator_list=indicator_list,
@@ -88,14 +97,17 @@ class StockMarket(gym.Env):
         self.net_worth = None
         self.current_reward = None
         self.cost_basis = None
+        self.asset_value = None
+        self.current_dd = None
+        self.max_dd = max_drawdown
         self.hold_penalty = None
         self.shares_held = None
         self.current_price = None
         self.action_counts = None
         self.action_avgs = None
 
-        
-    # Resets env and state    
+
+    # Resets env and state
     def reset(self, seed, **options):
 
         new_tickers = False
@@ -118,8 +130,10 @@ class StockMarket(gym.Env):
         self.remaining_cash = self.total_cash
         self.current_reward = 0
         self.net_worth = self.total_cash
+        self.current_dd = 0
         self.shares_held = {}
         self.cost_basis = {}
+        self.asset_value = {}
         self.hold_penalty = {}
         self.current_price = {}
         self.action_counts = {'BUY': 0, 'HOLD': 0, 'SELL': 0}
@@ -130,6 +144,7 @@ class StockMarket(gym.Env):
         for asset in self.assets:
             self.shares_held[asset] = 0
             self.cost_basis[asset] = 0
+            self.asset_value[asset] = 0
             self.hold_penalty[asset] = 0
             self.current_price[asset] = 0
 
@@ -145,7 +160,7 @@ class StockMarket(gym.Env):
         # Make first observation
         return self._next_observation(), {}
 
-    
+
     # Used to prepare and package the next group of observations for the algo
     def _next_observation(self):
 
@@ -187,9 +202,10 @@ class StockMarket(gym.Env):
             """
 
             # Build list of columns to use as features for state data
-            col_list = ['Close_norm']
+            col_postfix = "_scaled"
+            col_list = ['Close' + col_postfix]
             if self.include_ti:
-                col_list += [ind + "_norm" for ind in self.data.indicator_list]
+                col_list += [ind + col_postfix for ind in self.data.indicator_list]
 
             # Normalize and append features to observation array
             for col in col_list:
@@ -204,8 +220,7 @@ class StockMarket(gym.Env):
         # Action needs to be reshaped from [A, B, A, B] -> [[A, B],[A, B]]
         action = action.reshape((-1, 2))
 
-        # Build net worth and reward iteratively for portfolio on each step
-        self.net_worth = 0
+        # Build reward iteratively for portfolio on each step
         self.current_reward = 0
 
         """
@@ -225,117 +240,188 @@ class StockMarket(gym.Env):
             shares_held = self.shares_held[asset]
             current_price = self.current_price[asset]
             cost_basis = self.cost_basis[asset]
+            prev_asset_value = self.asset_value[asset]
+            prev_remaining_cash = self.remaining_cash
+            prev_net_worth = self.net_worth
 
             # If sell action...
-            if action <= 0.75 and shares_held > 0:
+            if action <= 1.00 and shares_held > 0:
 
                 self.action[asset] = "SELL"
 
                 # Calculate how many shares to sell and update portfolio
-                shares_sold = int(shares_held * qty)
-                share_avg_cost = shares_sold * cost_basis
+                shares_sold_f = shares_held * self.max_trade_perc * qty
+                shares_sold = int(shares_sold_f)
+
+                # Calculate commission
+                commission = None
+                if self.use_fixed_trade_cost:
+                    commission = self.trade_cost
+                else:
+                    commission = current_price * self.perc_trade_cost * shares_sold
+
+                # Add funds to remaining cash
                 share_value = shares_sold * current_price
-                #self.current_reward += (share_value - share_avg_cost - self.trade_cost)
-                self.remaining_cash += (share_value - self.trade_cost)
+                self.remaining_cash += (share_value - commission)
 
-                # Calculate hold penalty
-                prev_penalty = self.hold_penalty[asset]  # Last part reduces total penalty by sale perc
-                self.hold_penalty[asset] = (shares_held * self.holding_cost + prev_penalty) * (1 - qty)
-
+                # Update Share Count
                 shares_held -= shares_sold
-                total_asset_value = shares_held * current_price
-                self.net_worth += total_asset_value
-                self.current_reward += total_asset_value * (1 - self.hold_penalty[asset])
+                assert shares_held >= 0, f"Cannot hold {shares_held} shares; value must be 0 or greater!"
 
-                #print(f"[{asset}]: {shares_sold} @ ${current_price:.2f} == {(shares_sold * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
+                # Update Net Worth and Reward for timestep
+                new_asset_value = shares_held * current_price
+                self.net_worth += new_asset_value - prev_asset_value
+                self.asset_value[asset] = new_asset_value
+                self.current_reward += new_asset_value
+
+                # Recalculate net worth
+                self.net_worth += self.remaining_cash - prev_remaining_cash
+
+                # Log key variables for debugging
+                logging.debug(
+                    f"[{asset}]: SELL ----- \n"
+                    + f" - {shares_sold} SOLD @ ${current_price:.2f} == {(shares_sold * current_price):.2f}\n"
+                    + f"- net worth = ${self.net_worth:.2f}\n"
+                    + f"- previous asset value = ${prev_asset_value:.2f}\n"
+                    + f"- new asset value = ${self.asset_value[asset]:.2f}\n"
+                    + f"- current reward = {self.current_reward:.2f}\n"
+                    + f"- new cash remaining = ${self.remaining_cash:.2f}\n"
+                    + f"- new shares held = {shares_held}\n"
+                    + f"- new shares sold = {shares_sold}\n"
+                    + f"- new commission = {commission}\n"
+                )
 
                 # If all shares are sold, then cost basis is reset
                 if shares_held == 0:
                     cost_basis = 0
-                    self.hold_penalty[asset] = 0
 
             # If buy action...
-            elif action >= 2.25 and self.remaining_cash > current_price * 2:
+            elif action >= 2.00 and self.remaining_cash > current_price and self.current_dd < self.max_dd:
 
+                # Set current action
                 self.action[asset] = "BUY"
 
-                # Calculate how many shares to buy
-                capped_funds = self.max_drawdown * self.remaining_cash
-                if self.num_assets > 1:
-                    capped_funds = capped_funds * 0.75 # Only expose 75% of capped funds to allow remaining cash for other assets
-                allocated_funds = int((capped_funds - self.trade_cost) / current_price)
-                shares_bought = int(allocated_funds * qty)
+                # Calculate remaining cash until max drawdown % reached
+                remaining_dd = self.max_dd - self.current_dd
+                fund_limit = self.net_worth * remaining_dd
+
+                # Calculate available funds factoring in maximum trade percentage, and qty (% of max to trade)
+                # then get min between product and fund limit (based on max drawdown)
+                avail_funds = self.remaining_cash * self.max_trade_perc * qty
+                avail_funds = min(avail_funds, fund_limit)
+
+                # Lastly, calculate max number of shares that can be bought as well as commission payed
+                shares_bought = None
+                commission = None
+                if self.use_fixed_trade_cost:
+                    commission = self.trade_cost
+                    shares_bought = int((avail_funds - commission) / current_price)
+                else:
+                    shares_bought = int(avail_funds / (current_price * (1 + self.perc_trade_cost)))
+                    commission = shares_bought * (current_price * self.perc_trade_cost)
 
                 prev_cost = None
                 additional_cost = None
 
                 if shares_bought > 0:
 
-                    # Calc and update average cost of position
+                    # Update cost basis (average cost per share)
                     prev_cost = cost_basis * shares_held
                     additional_cost = shares_bought * current_price
-                    self.remaining_cash -= (additional_cost + self.trade_cost)
+                    try:
+                        cost_basis = ((prev_cost + additional_cost) / (shares_held + shares_bought))
+                    except Exception:
+                        print(f"PREV_COST {prev_cost}; ADDITIONAL {additional_cost}; shares_held {shares_held}; shares_bought {shares_bought}")
+                        sys.exit()
 
-                    if (prev_cost + additional_cost) == 0 or (shares_held + shares_bought) == 0:
-                        raise Exception(f"""Entered Error State: Invalid cost basis (division by zero). See below:
-                                        Current Price: ${current_price:.2f}
-                                        Previous Cost: ${prev_cost:.2f}
-                                        Additional Cost: ${additional_cost:.2f}
-                                        Shares Held: {shares_held}
-                                        Shares Bought: {shares_bought}""")
-
-                    # Calculate hold penalty
-                    self.hold_penalty[asset] += shares_held * self.holding_cost
-
-                    # Update cost basis and share count
-                    cost_basis = ((prev_cost + additional_cost) / (shares_held + shares_bought))
+                    # Update share count
                     shares_held += shares_bought
-                    total_asset_value = shares_held * current_price
-                    self.net_worth += total_asset_value
-                    self.current_reward += total_asset_value * (1 - self.hold_penalty[asset])
-                    #print(f"[{asset}]: {shares_bought} @ ${current_price:.2f} == {(shares_bought * current_price):.2f}, leaving {self.remaining_cash:.2f}.")
+
+                    # Subtract costs from remaining cash and update net worth
+                    self.remaining_cash -= (additional_cost + commission)
+
+                    # Update Net Worth and Reward for timestep
+                    new_asset_value = shares_held * current_price
+                    self.net_worth += new_asset_value - prev_asset_value
+                    self.asset_value[asset] = new_asset_value
+                    self.current_reward += new_asset_value
+
+                    # Recalculate net worth
+                    self.net_worth += self.remaining_cash - prev_remaining_cash
+
+                    # Log key variables for debugging
+                    logging.debug(
+                        f"[{asset}]: BUY ----- \n"
+                        + f" - {shares_bought} BOUGHT @ ${current_price:.2f} == {(shares_bought * current_price):.2f}\n"
+                        + f"- max_drawdown ({self.max_dd}) - current_drawdown ({self.current_dd}) = {remaining_dd}"
+                        + f" (${fund_limit:.2f})\n"
+                        + f"- Available funds (with max_trade_perc and drawdown limit = ${avail_funds:.2f}\n"
+                        + f"- prev net worth = ${prev_net_worth:.2f}; net worth = ${self.net_worth:.2f}\n"
+                        + f"- previous asset value = ${prev_asset_value:.2f}\n"
+                        + f"- new asset value = ${self.asset_value[asset]:.2f}\n"
+                        + f"- current reward = {self.current_reward:.2f}\n"
+                        + f"- new cash remaining = ${self.remaining_cash:.2f}\n"
+                        + f"- new shares held = {shares_held}\n"
+                        + f"- new shares bought = {shares_bought}\n"
+                        + f"- new commission = {commission}\n"
+                    )
 
             # If hold, or failed sell/buy action...
             else:
 
                 self.action[asset] = "HOLD"
-                # print(f"[{asset}]: Hold")
 
-                self.hold_penalty[asset] += shares_held * self.holding_cost
-                total_asset_value = shares_held * current_price
-                self.current_reward += total_asset_value * (1 - self.hold_penalty[asset])
+                # Calculate current asset value
+                new_asset_value = shares_held * current_price
+
+                # Update current reward and net worth
+                self.current_reward += new_asset_value
+                self.net_worth += new_asset_value - prev_asset_value
+
+                # Log key variables for debugging
+                logging.debug(
+                    f"[{asset}]: HOLD ----- \n"
+                    + f"- current reward = {self.current_reward:.2f}\n"
+                )
+
+            # Recalculate drawdown
+            self.current_dd = 1 - (self.remaining_cash / self.net_worth)
 
             # Update dictionaries
             self.shares_held[asset] = shares_held
             self.current_price[asset] = current_price
             self.cost_basis[asset] = cost_basis
 
-            # Update Net Worth for both actions above
-            self.net_worth += self.remaining_cash
-            self.current_reward += self.remaining_cash
+            # Update stats on actions taken this episode
             self.action_counts[self.action[asset]] += 1
             self.action_avgs[self.action[asset]] = (((self.action_counts[self.action[asset]] - 1) * self.action_avgs[self.action[asset]]) + qty) / self.action_counts[self.action[asset]]
+
+        # Update current reward
+        self.current_reward += self.remaining_cash
+
+        logging.debug(f"UPDATING CURRENT DRAWDOWN TO: {self.current_dd:.4f}")
+        logging.debug(f"CURRENT REWARD FOR STEP: {self.current_reward:.2f}")
 
         return
 
 
-    def calculate_reward(self, prev_reward):
-
-        net_reward = self.current_reward - prev_reward
-        return net_reward
-        
-    
     # Process a time step in the execution of trading simulation
     def step(self, action):
 
-        # Get net_worth before action as portfolio value @ t - 1
+        # Get snapshots of reward and net worth
         prev_reward = self.current_reward
+        prev_net = self.net_worth
 
         # Execute one time step within the environment
         self._take_action(action)
 
-        # Calculate reward for action
-        reward = self.calculate_reward(prev_reward)
+        # Calculate reward, and scale to between 0 and 100
+        reward = 0
+        if prev_reward and self.current_reward - prev_reward != 0:
+            reward = ((self.current_reward - prev_reward) / prev_reward) * 100
+
+        # Log reward calculation
+        logging.debug(f"REWARD FOR STEP ==  {reward}\n")
 
         # Conditions for ending the training episode
         obs = None
@@ -359,11 +445,14 @@ class StockMarket(gym.Env):
         info = {
             'action_counts': self.action_counts,
             'action_avgs': self.action_avgs,
-            'net_worth': self.net_worth
+            'hold_penalty': self.hold_penalty,
+            'net_change': self.net_worth - prev_net,
+            'net_worth': self.net_worth,
+            'action': self.action
         }
 
-        return obs, reward, done, {}, info
-            
+        return obs, self.net_worth - prev_net, done, {}, info
+
     # Render the stock and trading decisions to the screen
     #TODO: Update charting to support portfolio of assets
     def render(self, action=None):
