@@ -14,12 +14,12 @@ class Actor(nn.Module):
         # Get input and output neuron counts
         input_neurons = np.array(envs.single_observation_space.shape).prod()
         output_neurons = np.prod(envs.single_action_space.shape)
+
         if debug:
             print(f"ACTOR NETWORK SHAPE: {input_neurons} -> ... -> {output_neurons}.")
 
         self.fc1 = nn.Linear(input_neurons, 256)
-        self.bn1 = nn.BatchNorm1d(256)
-        self.fc2 = nn.Linear(input_neurons, 256)
+        self.fc2 = nn.Linear(256, 256)
         self.fc_mu = nn.Linear(256, output_neurons)
         self.register_buffer(
             "action_scale", torch.tensor((envs.action_space.high - envs.action_space.low) / 2.0, dtype=torch.float32)
@@ -32,8 +32,7 @@ class Actor(nn.Module):
         self.forward = self.debug_forward if debug else self.forward
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = F.relu(self.bn1(x))
+        x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = torch.tanh(self.fc_mu(x))
         return x * self.action_scale + self.action_bias
@@ -47,8 +46,7 @@ class Actor(nn.Module):
             raise Exception(f"""Actor Network has received value that falls outside of bounds -1 and +1:
             - Raw Tensor: {x_in}""")
 
-        x = self.fc1(x_in)
-        x = F.relu(self.bn1(x))
+        x = F.relu(self.fc1(x_in))
         x = F.relu(self.fc2(x))
         x = torch.tanh(self.fc_mu(x))
 
@@ -69,13 +67,16 @@ class QNetwork(nn.Module):
         super().__init__()
 
         # Get input and output neuron counts
-        input_neurons = np.array(envs.single_observation_space.shape).prod() + np.prod(envs.single_action_space.shape)
+        state_inputs = envs.single_observation_space.shape.prod()
+        action_inputs = envs.single_action_space.shape.prod()
         output_neurons = 1
+
         if debug:
-            print(f"CRITIC NETWORK SHAPE: {input_neurons} -> ... -> {output_neurons}.")
+            print(f"CRITIC NETWORK SHAPE: {(state_inputs, action_inputs)} -> ... -> {output_neurons}.")
 
         self.debug = debug
-        self.fc1 = nn.Linear(input_neurons, 256)
+        self.fc1 = nn.Linear(state_inputs + action_inputs, 256)
+        self.bn1 = nn.BatchNorm1d(256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, output_neurons)
 
@@ -83,9 +84,8 @@ class QNetwork(nn.Module):
         self.forward = self.debug_forward if debug else self.forward
 
     def forward(self, x, a):
-
         x = torch.cat([x, a], 1)
-        x = F.relu(self.fc1(x))
+        x = F.relu(self.bn1(self.fc1(x)))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
@@ -101,7 +101,7 @@ class QNetwork(nn.Module):
 
         # Pass data through network layers
         x = torch.cat([x_in, a], 1)
-        x = F.relu(self.fc1(x))
+        x = F.relu(self.bn1(self.fc1(x)))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
 
@@ -144,6 +144,7 @@ class TD3:
                  actions_low,
                  actions_high,
                  batch_size,
+                 max_grad_norm=2.0,
                  debug=False):
 
         # Learning params
@@ -163,14 +164,18 @@ class TD3:
         self.batch_size = batch_size
         self.replay_buffer = replay_buffer
 
+        # Hyperparams intended for mitigating exploding gradient issue
+        self.batchnorm_learning_enabled = False
+        self.max_grad_norm = max_grad_norm
+
         # Only need to enable debugging - if asked - on one of each network
-        self.actor = BatchNormWrapper(Actor(envs, debug=debug).to(device))
-        self.qf1 = QNetwork(envs, debug=debug).to(device)
+        self.actor = Actor(envs, debug=debug).to(device)
+        self.qf1 = BatchNormWrapper(QNetwork(envs, debug=debug).to(device))
 
         self.qf2 = QNetwork(envs).to(device)
         self.qf1_target = QNetwork(envs).to(device)
         self.qf2_target = QNetwork(envs).to(device)
-        self.target_actor = BatchNormWrapper(Actor(envs).to(device))
+        self.target_actor = Actor(envs).to(device)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.qf1_target.load_state_dict(self.qf1.state_dict())
         self.qf2_target.load_state_dict(self.qf2.state_dict())
@@ -185,6 +190,15 @@ class TD3:
         self.qf_loss = None
         self.actor_loss = None
 
+
+    def switch_to_train_mode(self):
+        self.batchnorm_learning_enabled = True
+        self.critic.switch_to_train_mode()
+
+
+    def switch_to_eval_mode(self):
+        self.batchnorm_learning_enabled = False
+        self.critic.switch_to_eval_mode()
 
     def evaluate(self, eval_env, seed):
         cum_reward = 0
@@ -243,9 +257,14 @@ class TD3:
         self.qf2_loss = F.mse_loss(self.qf2_a_values, next_q_value)
         self.qf_loss = self.qf1_loss + self.qf2_loss
 
-        # optimize the model
+        # prepare for optimization
         self.q_optimizer.zero_grad()
         self.qf_loss.backward()
+
+        # Clip gradients before performing the optimization step
+        torch.nn.utils.clip_grad_norm_(self.max_grad_norm)
+
+        # optimize
         self.q_optimizer.step()
 
         if update_policy:

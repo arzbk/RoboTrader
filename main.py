@@ -305,6 +305,9 @@ def run():
     episode_num = 1
     eval_episode = 1
 
+    # Enable batch norm learning
+    p.switch_to_train_mode()
+
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=Experiment.seed)
     for global_step in range(Algorithm.total_timesteps):
@@ -388,9 +391,8 @@ def run():
 
         if global_step % 20000 == 0 and global_step >= Algorithm.learning_starts:
 
-            # Enable batch norm learning
-            p.actor.switch_to_eval_mode()
-            p.target_actor.switch_to_eval_mode()
+            # Disable batch norm learning
+            p.switch_to_eval_mode()
 
             logging.info(f"===== EVAL MODEL STARTED =====")
 
@@ -408,6 +410,9 @@ def run():
                 )
 
             logging.info(f"===== EVAL MODEL FINISHED =====")
+
+            # Re-Enable batch norm learning
+            p.switch_to_train_mode()
 
             eval_episode += Algorithm.eval_episodes
 
