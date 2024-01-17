@@ -114,6 +114,7 @@ class QNetwork(nn.Module):
 
         return x
 
+
 class BatchNormWrapper(nn.Module):
     def __init__(self, model):
         super(BatchNormWrapper, self).__init__()
@@ -127,6 +128,7 @@ class BatchNormWrapper(nn.Module):
 
     def switch_to_eval_mode(self):
         self.eval()
+
 
 class TD3:
     def __init__(self,
@@ -176,9 +178,9 @@ class TD3:
         self.qf1_target = BatchNormWrapper(QNetwork(envs).to(device))
         self.qf2_target = BatchNormWrapper(QNetwork(envs).to(device))
         self.target_actor = Actor(envs).to(device)
-        self.target_actor.load_state_dict(self.actor.state_dict())
-        self.qf1_target.load_state_dict(self.qf1.state_dict())
-        self.qf2_target.load_state_dict(self.qf2.state_dict())
+        self.target_actor.load_state_dict(self.actor.state_dict(), strict=False)
+        self.qf1_target.load_state_dict(self.qf1.state_dict(), strict=False)
+        self.qf2_target.load_state_dict(self.qf2.state_dict(), strict=False)
         self.q_optimizer = optim.Adam(list(self.qf1.parameters()) + list(self.qf2.parameters()), lr=critic_learning_rate)
         self.actor_optimizer = optim.Adam(list(self.actor.parameters()), lr=actor_learning_rate)
 
