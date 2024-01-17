@@ -13,7 +13,7 @@ class Actor(nn.Module):
 
         # Get input and output neuron counts
         input_neurons = np.array(envs.single_observation_space.shape).prod()
-        output_neurons = np.prod(envs.single_action_space.shape)
+        output_neurons = np.array(envs.single_action_space.shape).prod()
 
         if debug:
             print(f"ACTOR NETWORK SHAPE: {input_neurons} -> ... -> {output_neurons}.")
@@ -67,8 +67,8 @@ class QNetwork(nn.Module):
         super().__init__()
 
         # Get input and output neuron counts
-        state_inputs = envs.single_observation_space.shape.prod()
-        action_inputs = envs.single_action_space.shape.prod()
+        state_inputs = np.array(envs.single_observation_space.shape).prod()
+        action_inputs = np.array(envs.single_action_space.shape).prod()
         output_neurons = 1
 
         if debug:
@@ -119,8 +119,8 @@ class BatchNormWrapper(nn.Module):
         super(BatchNormWrapper, self).__init__()
         self.model = model
 
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, x, a):
+        return self.model(x, a)
 
     def switch_to_train_mode(self):
         self.train()
@@ -172,9 +172,9 @@ class TD3:
         self.actor = Actor(envs, debug=debug).to(device)
         self.qf1 = BatchNormWrapper(QNetwork(envs, debug=debug).to(device))
 
-        self.qf2 = QNetwork(envs).to(device)
-        self.qf1_target = QNetwork(envs).to(device)
-        self.qf2_target = QNetwork(envs).to(device)
+        self.qf2 = BatchNormWrapper(QNetwork(envs).to(device))
+        self.qf1_target = BatchNormWrapper(QNetwork(envs).to(device))
+        self.qf2_target = BatchNormWrapper(QNetwork(envs).to(device))
         self.target_actor = Actor(envs).to(device)
         self.target_actor.load_state_dict(self.actor.state_dict())
         self.qf1_target.load_state_dict(self.qf1.state_dict())
@@ -193,12 +193,14 @@ class TD3:
 
     def switch_to_train_mode(self):
         self.batchnorm_learning_enabled = True
-        self.critic.switch_to_train_mode()
+        self.qf1.switch_to_train_mode()
+        self.qf2.switch_to_train_mode()
 
 
     def switch_to_eval_mode(self):
         self.batchnorm_learning_enabled = False
-        self.critic.switch_to_eval_mode()
+        self.qf1.switch_to_eval_mode()
+        self.qf2.switch_to_eval_mode()
 
     def evaluate(self, eval_env, seed):
         cum_reward = 0
@@ -262,7 +264,7 @@ class TD3:
         self.qf_loss.backward()
 
         # Clip gradients before performing the optimization step
-        torch.nn.utils.clip_grad_norm_(self.max_grad_norm)
+        #torch.nn.utils.clip_grad_norm_(max_norm=self.max_grad_norm)
 
         # optimize
         self.q_optimizer.step()

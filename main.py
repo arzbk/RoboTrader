@@ -40,7 +40,7 @@ class Experiment(Args):
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = True
+    track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -321,10 +321,6 @@ def run():
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
 
         else:
-
-            # Enable batch norm learning
-            p.actor.switch_to_train_mode()
-            p.target_actor.switch_to_train_mode()
 
             actions = p.get_actions(obs)
 
