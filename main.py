@@ -16,6 +16,8 @@ import stable_baselines3 as sb3
 from torch.utils.tensorboard import SummaryWriter
 from tensorboard import program
 import logging
+import cProfile
+import pstats
 
 # My imports
 from env import StockMarket
@@ -24,6 +26,10 @@ from algorithms.TD3.PyTorch import TD3
 
 def get_random_seed():
     return round(time.time())
+
+# Define profiler regions
+pre_profiler = cProfile.Profile() # - Profiles the preprocessing stage
+env_profiler = cProfile.Profile() # - Profiles the env "Step" process
 
 @dataclass
 class Args:
@@ -42,7 +48,7 @@ class Experiment(Args):
     """if toggled, cuda will be enabled by default"""
     track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "RoboTrader"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -54,6 +60,7 @@ class Experiment(Args):
     """whether to upload the saved model to huggingface"""
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
+
 
 @dataclass
 class Algorithm(Args):
@@ -90,6 +97,7 @@ class Algorithm(Args):
     """noise clip parameter of the Target Policy Smoothing Regularization"""
     debug_mode: bool = False
     """Enables debugging data logging and conditional code"""
+    profile_mode: bool = True
 
 @dataclass
 class TradingParams(Args):
@@ -176,7 +184,11 @@ def run():
             project=Experiment.wandb_project_name,
             entity=Experiment.wandb_entity,
             sync_tensorboard=True,
-            config=vars(Experiment),
+            config={
+                'Experiment': vars(Experiment),
+                'Algorithm': vars(Algorithm),
+                'Trading_Params': vars(TradingParams)
+            },
             name=run_name,
             monitor_gym=True,
             save_code=True,
@@ -308,9 +320,25 @@ def run():
     # Enable batch norm learning
     p.switch_to_train_mode()
 
-    # TRY NOT TO MODIFY: start the game
+    # Reset environment and profile this process if applicable (mostly data preprocessing)
+    if Algorithm.profile_mode: pre_profiler.enable()
     obs, _ = envs.reset(seed=Experiment.seed)
-    for global_step in range(Algorithm.total_timesteps):
+    if Algorithm.profile_mode:
+        pre_profiler.disable()
+        pre_profiler_stats = pstats.Stats(pre_profiler)
+        pre_profiler_stats.dump_stats("pre.perf")
+
+    # Profile an environment step to assess environmental performance if applicable
+    if Algorithm.profile_mode:
+        actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
+        env_profiler.enable()
+        _, _, _, _, _ = envs.step(actions)
+        env_profiler.disable()
+        env_profiler_stats = pstats.Stats(env_profiler)
+        env_profiler_stats.dump_stats("env.perf")
+        sys.exit(0)
+
+    for global_step in range(Algorithm.total_timesteps + int(Algorithm.profile_mode)):
 
         # ALGO LOGIC: put action logic here
         if global_step < Algorithm.learning_starts or evaluate_epsilon(
@@ -321,10 +349,8 @@ def run():
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
 
         else:
-
             actions = p.get_actions(obs)
 
-        # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
 
         # Log various metrics to file when episode is complete
@@ -420,17 +446,5 @@ def run():
     writer.close()
 
 if __name__ == "__main__":
-    """
-    import cProfile
-    import pstats
 
-    profiler = cProfile.Profile()
-    profiler.enable()
-    run()
-    profiler.disable()
-
-    # Save the profiling results to a file
-    profile_stats = pstats.Stats(profiler)
-    profile_stats.dump_stats("perf.data")
-    """
     run()
