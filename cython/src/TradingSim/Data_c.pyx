@@ -1,19 +1,29 @@
 from datetime import timedelta
 from datetime import datetime
+
+import cython
+
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
 import calendar
 import random
-import numpy as np
-import pandas as pd
-import pandas_ta as ta
 import csv
-import sys
 from pandas_market_calendars import get_calendar
 
 from YFinanceCache import *
 
 class StockData:
 
+    # Declare Cython Tracking Vars
+    start_index: cython.int
+    current_step: cython.int
+    i: cython.int
+    max_steps: cython.int
+
+    # Variables for holding training data for env
+    stock_df: cython.dict
+    stock_data: cython.dict
+    lead_df: cython.dict
+    lead_data: cython.dict
     def __init__(self,
                  filename="Stock Data/sp500_stocks.csv",
                  num_assets=1,
@@ -34,32 +44,36 @@ class StockData:
         self.filename = filename
 
         # Tracking Variables
-        self.start_index = None
-        self.current_step = None
-        self.i = None
-        self.max_steps = None
+        self.start_index = 0
+        self.current_step = 0
+        self.i = 0
+        self.max_steps = 0
 
+        # Variables for calculated columns
+        self.lead_period = 6
         self.rolling_window_size = rolling_window_size
+        self.include_ti = include_ti
+        self.lookback = lookback_window
+        self.indicator_list = indicator_list
+        self.indicator_args = indicator_args
 
-        # Data Variables
+        # Portfolio variables
         self.fixed_start_date = fixed_start_date
         self.range_start_date = range_start_date
         self.range_end_date = range_end_date
         self.fixed_portfolio = fixed_portfolio
         self.p_months = period_months
-        self.lead_period = 6 # 3 Months of data prior to observed trading period
+        self.lead_period = 6
         self.num_assets = num_assets
         self.lead_date = None
         self.start_date = None
         self.end_date = None
-        self.stock_data = None
-        self.leading_data = None
+        self.stock_df = None
+        self.leading_df = None
 
-        # Set to true when computing indicators
-        self.include_ti = include_ti
-        self.lookback = lookback_window
-        self.indicator_list = indicator_list
-        self.indicator_args = indicator_args
+        # env training variables
+        self.stock_data = {}
+        self.leading_data = {}
 
         # Instantiate yfinance wrapper for cache handling
         self.yf = YFinanceCache("yfinance_cache")
@@ -105,14 +119,14 @@ class StockData:
         # Initialize or reset stock selections and data
         if self.fixed_portfolio and not self.stock_data:
 
-            self.stock_data = {}
-            self.leading_data = {}
+            self.stock_df = {}
+            self.leading_df = {}
 
             for ticker in self.fixed_portfolio:
 
                 df = self.get_stock_data(ticker)
                 if self.is_valid_data(df):
-                    self.stock_data[ticker] = df
+                    self.stock_df[ticker] = df
 
                     # Prepare dataframe for training and testing
                     self.preprocess_dataframe(df, ticker)
@@ -120,10 +134,10 @@ class StockData:
                 else:
                     print(f"Warning: Stock \"{ticker}\" is invalid from {self.start_date} to {self.end_date}; skipping...")
 
-        elif new_tickers or not self.stock_data:
+        elif new_tickers or not self.stock_df:
 
-            self.stock_data = {}
-            self.leading_data = {}
+            self.stock_df = {}
+            self.leading_df = {}
 
             for i in range(0, self.num_assets):
 
@@ -135,18 +149,16 @@ class StockData:
                     ticker = self.stocks[self.quarter][stock_idx]
                     df = self.get_stock_data(ticker)
                     if self.is_valid_data(df):
-                        self.stock_data[ticker] = df
+                        self.stock_df[ticker] = df
                         break
 
                 # Prepare dataframe for training and testing
-                self.preprocess_dataframe(self.stock_data[ticker], ticker)
+                self.preprocess_dataframe(self.stock_df[ticker], ticker)
 
         # Reset i for new episode
         self.i = self.start_index
 
-        print("----START INDEX: "+str(self.i))
-
-        return list(self.stock_data.keys())
+        return list(self.stock_df.keys())
 
     def preprocess_dataframe(self, df, ticker):
 
@@ -157,50 +169,44 @@ class StockData:
         df = df.sort_index()
 
         # Set instance vars relating to batch of data
-        self.leading_data[ticker] = df.loc[df['Date'] <= self.start_date]
+        self.leading_df[ticker] = df.loc[df['Date'] <= self.start_date]
 
         # Keep standard start and stop indexes for all assets in portfolio
         if self.max_steps:
-            self.start_index = max(self.start_index, len(self.leading_data[ticker]))
+            self.start_index = max(self.start_index, len(self.leading_df[ticker]))
             self.max_steps = min(self.max_steps, df.index.size - 1)
 
         else:
-            self.start_index = len(self.leading_data[ticker])
+            self.start_index = len(self.leading_df[ticker])
             self.max_steps = df.index.size - 1
 
         # Add computed values to retrieved data if included
         if self.include_ti:
-            self.validate_technical_indicators(df)
+            self.add_technical_indicators(df)
 
         # Add delta columns (% chng between rows for each col)
-        self.validate_delta_columns(df)
+        self.add_computed_columns(df)
 
         # Cache dataframe now that setup is complete
         self.yf.update_cache(df=df, start=self.start_date, end=self.end_date, ticker=ticker)
-        self.stock_data[ticker] = df
+        self.stock_df[ticker] = df
+
+        # Convert dataframes to numpy arrays and add to cython dicts for fast retrieval
+        cols: cython.dict = {}
+        for col in self.stock_df[ticker].columns:
+            cols[col] = self.stock_df[ticker][col].to_numpy()
+        self.stock_data[ticker] = cols
 
 
     # Defines the technical indicators to be used with data and computes / adds them
-    def validate_technical_indicators(self, df):
-
-        """BELOW CODE ENSURES NO DIVISIONS BY ZERO WHILE KEEPING SIGNAL QUALITY OF INDICATORS
-        - epsilon adds an extremely small amount of unique variance to every row
-        epsilon = 1e-20
-        num_cols = 5
-        df_len = len(df.index)
-        e_open = epsilon * pd.Series(range(1, df_len * num_cols, 5), dtype=float)
-        e_close = epsilon * pd.Series(range(2, df_len * num_cols, 5), dtype=float)
-        e_high = epsilon * pd.Series(range(3, df_len * num_cols, 5), dtype=float)
-        e_low = epsilon * pd.Series(range(4, df_len * num_cols, 5), dtype=float)
-        e_volume = epsilon * pd.Series(range(5, df_len * num_cols, 5), dtype=float)
-        """
+    def add_technical_indicators(self, df):
 
         # Gather key data for calculations
-        df['Open'] = df['Open'].astype(float)# + e_open
-        df['Close'] = df['Close'].astype(float)# + e_close
-        df['High'] = df['High'].astype(float)# + e_high
-        df['Low'] = df['Low'].astype(float)# + e_low
-        df['Volume'] = df['Volume'].astype(float)# + e_volume
+        df['Open'] = df['Open'].astype(float)
+        df['Close'] = df['Close'].astype(float)
+        df['High'] = df['High'].astype(float)
+        df['Low'] = df['Low'].astype(float)
+        df['Volume'] = df['Volume'].astype(float)
 
         # Apply unique, incrementing epsilon to each column so that no zero division ever occurs
 
@@ -225,7 +231,7 @@ class StockData:
 
 
     # Dynamically check for and add missing pct change columns for each regular column
-    def validate_delta_columns(self, df):
+    def add_computed_columns(self, df):
 
         # Replace zeros with NaN before below operation
         #df[['ROC', 'WILLR']] = df[['ROC', 'WILLR']].replace(0, pd.NA)
@@ -264,29 +270,19 @@ class StockData:
     def __len__(self):
         return self.max_steps
 
-
-    # Allows subscription of the data directly from outside of the class
-    def __getitem__(self, key):
-        retval = {}
-        if isinstance(key, slice):
-            start_i = key.start or 0
-            end_i = key.stop or 0
-            for ticker in self.stock_data:
-                df = self.stock_data[ticker].iloc[self.i + start_i:self.i + end_i]
-                retval[ticker] = df
-        elif key is None:
-            for ticker in self.stock_data:
-                retval[ticker] = self.stock_data[ticker].iloc[self.i + 0]
-        else:
-            for ticker in self.stock_data:
-                retval[ticker] = self.stock_data[ticker].iloc[self.i + key]
-
-        return retval
-
-
     def next(self):
         self.current_step += 1
         self.i = self.current_step + self.start_index
+        retval: cython.dict = {}
+        retval = {
+            ticker: {
+                col: self.stock_data[ticker][col][self.i]
+                for col in self.stock_data[ticker].keys()
+            }
+            for ticker in self.stock_data.keys()
+        }
+
+        return retval
 
 
     def get_leading_data(self):

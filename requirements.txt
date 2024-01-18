@@ -1,0 +1,14 @@
+gymnasium~=0.28.1
+numpy~=1.24.3
+pandas~=2.0.1
+torch~=2.1.2+cu121
+tyro~=0.6.3
+tensorboard~=2.15.1
+Cython~=3.0.8
+flax~=0.7.5
+jax~=0.4.23
+optax~=0.1.8
+wandb~=0.13.11
+tensorflow~=2.15.0
+yfinance~=0.2.32
+pygame~=2.1.0

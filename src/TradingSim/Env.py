@@ -2,10 +2,8 @@ import sys
 import gymnasium as gym
 import numpy as np
 import random
-import time
-from Data import StockData
-from Graphics import StockChart
-import pandas as pd
+from .Data import StockData
+from .Graphics import StockChart
 import logging
 
 # Configure Numpy to throw divide by zero as exception and halt program
@@ -109,9 +107,8 @@ class StockMarket(gym.Env):
 
     # Resets env and state
     def reset(self, seed, **options):
-
         new_tickers = False
-        new_dates = True
+        new_dates = False
         has_ui = False
         if 'new_tickers' in list(options.keys()):
             new_tickers = options['new_tickers']
@@ -177,9 +174,11 @@ class StockMarket(gym.Env):
         For 1 asset, and no sentiment score, this means a 13 dimensional vector
         """
 
+        # Get next series of state data
+        self.step_data = self.data.next()
+
         # Get random price factor and step data before proceeding
         perc_of_close = random.uniform(0.97, 1.03)
-        self.step_data = self.data[0]
 
         # Initialize observation (state) array to be sent to the networks
         obs_arr = np.array([])
@@ -195,11 +194,6 @@ class StockMarket(gym.Env):
             # Add price and shares held to the observation or state array
             total_possible_shares = (self.remaining_cash / self.current_price[asset]) + self.shares_held[asset]
             obs_arr = np.append(obs_arr, self.shares_held[asset] / total_possible_shares)
-
-            """ OLD WAY FOR SHARES HELD
-            # For shares held, express as percentage of total possible shares at today's rate
-            so = self.shares_held / (self.shares_held + (self.current_price / self.remaining_cash))
-            """
 
             # Build list of columns to use as features for state data
             col_postfix = "_scaled"
@@ -436,9 +430,6 @@ class StockMarket(gym.Env):
 
         # Get next observation
         if not done:
-
-            # Go to next step
-            self.data.next()
             obs = self._next_observation()
 
         # Add info for tensorboard and debugging
