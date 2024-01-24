@@ -1,10 +1,10 @@
+import os
 import sys
 import gymnasium as gym
 import numpy as np
 import random
-from .Data import StockData
-from .Graphics import StockChart
 import logging
+import pandas as pd
 
 # Configure Numpy to throw divide by zero as exception and halt program
 np.seterr(all='raise')
@@ -14,6 +14,8 @@ np.seterr(all='raise')
 class StockMarket(gym.Env):
 
     def __init__(self,
+                 seed,
+                 env_num=0,
                  cash=10000,
                  max_trade_perc=0.5,
                  max_drawdown=0.95,
@@ -38,6 +40,8 @@ class StockMarket(gym.Env):
 
         super(StockMarket, self).__init__()
 
+        self.env_num = env_num
+
         # Dynamically build action space based on number of assets
         self.action_space = gym.spaces.Box(
             low=np.tile(np.array([0, 0]), num_assets),
@@ -54,7 +58,10 @@ class StockMarket(gym.Env):
 
         # Intialize a live charting display for human feedback
         self.has_ui = False
-        self.chart = StockChart(toolbox=False, include_table=True, table_cols=['Cash', 'Shares', 'Value', 'Net'])
+        #self.chart = StockChart(toolbox=False, include_table=True, table_cols=['Cash', 'Shares', 'Value', 'Net'])
+
+        # Set random seed to be used system wide
+        random.seed(a=seed)
 
         # Variables that define how the training/observations will work
         self.use_fixed_trade_cost = use_fixed_trade_cost
@@ -70,21 +77,7 @@ class StockMarket(gym.Env):
         self.short_selling = short_selling
         self.rolling_window_size = rolling_window_size
         self.holding_cost = holding_cost
-
-        # Instatiate StockData class
-        self.data = StockData(
-            filename="Stock Data/sp500_stocks.csv",
-            num_assets=self.num_assets,
-            period_months=period_months,
-            fixed_start_date=fixed_start_date,
-            range_start_date=range_start_date,
-            range_end_date=range_end_date,
-            fixed_portfolio=fixed_portfolio,
-            include_ti=self.include_ti,
-            indicator_list=indicator_list,
-            indicator_args=indicator_args,
-            rolling_window_size=rolling_window_size
-        )
+        self.indicator_list = indicator_list
 
         # Cost and portfolio related vars
         self.action = {}
@@ -104,10 +97,38 @@ class StockMarket(gym.Env):
         self.action_counts = None
         self.action_avgs = None
 
+        self.i = None
+        self.data_len = None
+
+
+    def load_random_stock_data(self, dir, num_assets):
+        # List all CSV files in the directory
+        csv_files = [file for file in os.listdir(dir) if file.endswith('.csv')]
+
+        # Select num_assets random CSV files
+        selected_files = random.sample(csv_files, min(num_assets, len(csv_files)))
+        df_list = [pd.read_csv(os.path.join(dir, file)) for file in selected_files]
+
+        # Get tickers from file names
+        tickers = [selected_file.split('_')[0] for selected_file in selected_files]
+
+        # Open selected files as Pandas DataFrames
+        data = {
+            ticker: {
+                col: df_list[i][col].to_numpy()
+                for col in df_list[i].columns
+            }
+            for i, ticker in enumerate(tickers)
+        }
+
+        return data
+
 
     # Resets env and state
-    def reset(self, seed, **options):
+    def reset(self, **options):
+
         new_tickers = False
+        self.data_len = None
         new_dates = False
         has_ui = False
         if 'new_tickers' in list(options.keys()):
@@ -119,9 +140,6 @@ class StockMarket(gym.Env):
 
         # Set to True if we are rendering UI for this iteration
         self.has_ui = has_ui
-
-        # Set random seed to be used system wide
-        random.seed(a=seed)
 
         # Reset algorithm
         self.remaining_cash = self.total_cash
@@ -137,22 +155,18 @@ class StockMarket(gym.Env):
         self.action_avgs = {'BUY': 0, 'HOLD': 0, 'SELL': 0}
 
         # Reset Stock Data
-        self.assets = self.data.reset(seed, new_tickers=new_tickers, new_dates=new_dates)
+        self.data = self.load_random_stock_data(f"yfinance_cache/{self.env_num}/", self.num_assets)
+        self.assets = list(self.data.keys())
+
         for asset in self.assets:
+            if not self.data_len:
+                self.data_len = len(self.data[asset]['Close'])
+            self.i = 0
             self.shares_held[asset] = 0
             self.cost_basis[asset] = 0
             self.asset_value[asset] = 0
             self.hold_penalty[asset] = 0
             self.current_price[asset] = 0
-
-        if self.has_ui:
-
-            # Reset chart
-            self.chart.reset(self.data.get_leading_data())
-            self.chart.show()
-
-        else:
-            self.chart.hide()
 
         # Make first observation
         return self._next_observation(), {}
@@ -174,9 +188,6 @@ class StockMarket(gym.Env):
         For 1 asset, and no sentiment score, this means a 13 dimensional vector
         """
 
-        # Get next series of state data
-        self.step_data = self.data.next()
-
         # Get random price factor and step data before proceeding
         perc_of_close = random.uniform(0.97, 1.03)
 
@@ -189,7 +200,7 @@ class StockMarket(gym.Env):
         for asset in self.assets:
 
             # Set current price for asset for this next iteration
-            self.current_price[asset] = self.step_data[asset]['Close'] * perc_of_close
+            self.current_price[asset] = self.data[asset]['Close'][self.i] * perc_of_close
 
             # Add price and shares held to the observation or state array
             total_possible_shares = (self.remaining_cash / self.current_price[asset]) + self.shares_held[asset]
@@ -199,11 +210,11 @@ class StockMarket(gym.Env):
             col_postfix = "_scaled"
             col_list = ['Close' + col_postfix]
             if self.include_ti:
-                col_list += [ind + col_postfix for ind in self.data.indicator_list]
+                col_list += [ind + col_postfix for ind in self.indicator_list]
 
             # Normalize and append features to observation array
             for col in col_list:
-                col_val = self.step_data[asset][col]
+                col_val = self.data[asset][col][self.i]
                 obs_arr = np.append(obs_arr, col_val)
 
         return obs_arr
@@ -272,6 +283,7 @@ class StockMarket(gym.Env):
                 self.net_worth += self.remaining_cash - prev_remaining_cash
 
                 # Log key variables for debugging
+                """
                 logging.debug(
                     f"[{asset}]: SELL ----- \n"
                     + f" - {shares_sold} SOLD @ ${current_price:.2f} == {(shares_sold * current_price):.2f}\n"
@@ -284,6 +296,7 @@ class StockMarket(gym.Env):
                     + f"- new shares sold = {shares_sold}\n"
                     + f"- new commission = {commission}\n"
                 )
+                """
 
                 # If all shares are sold, then cost basis is reset
                 if shares_held == 0:
@@ -344,6 +357,7 @@ class StockMarket(gym.Env):
                     self.net_worth += self.remaining_cash - prev_remaining_cash
 
                     # Log key variables for debugging
+                    """
                     logging.debug(
                         f"[{asset}]: BUY ----- \n"
                         + f" - {shares_bought} BOUGHT @ ${current_price:.2f} == {(shares_bought * current_price):.2f}\n"
@@ -359,6 +373,7 @@ class StockMarket(gym.Env):
                         + f"- new shares bought = {shares_bought}\n"
                         + f"- new commission = {commission}\n"
                     )
+                    """
 
             # If hold, or failed sell/buy action...
             else:
@@ -373,10 +388,12 @@ class StockMarket(gym.Env):
                 self.net_worth += new_asset_value - prev_asset_value
 
                 # Log key variables for debugging
+                """
                 logging.debug(
                     f"[{asset}]: HOLD ----- \n"
                     + f"- current reward = {self.current_reward:.2f}\n"
                 )
+                """
 
             # Recalculate drawdown
             self.current_dd = 1 - (self.remaining_cash / self.net_worth)
@@ -392,9 +409,6 @@ class StockMarket(gym.Env):
 
         # Update current reward
         self.current_reward += self.remaining_cash
-
-        logging.debug(f"UPDATING CURRENT DRAWDOWN TO: {self.current_dd:.4f}")
-        logging.debug(f"CURRENT REWARD FOR STEP: {self.current_reward:.2f}")
 
         return
 
@@ -414,19 +428,9 @@ class StockMarket(gym.Env):
         if prev_reward and self.current_reward - prev_reward != 0:
             reward = ((self.current_reward - prev_reward) / prev_reward) * 100
 
-        # Log reward calculation
-        logging.debug(f"REWARD FOR STEP ==  {reward}\n")
-
         # Conditions for ending the training episode
         obs = None
-        done = (self.data.current_step + self.data.start_index + 1) == self.data.max_steps
-
-        # if ui enabled, slow down processing for human eyes
-        """
-        if self.has_ui:
-            self.render(action=self.action)
-            time.sleep(0.05)
-        """
+        done = (self.i + 1) == self.data_len
 
         # Get next observation
         if not done:
@@ -448,6 +452,9 @@ class StockMarket(gym.Env):
     #TODO: Update charting to support portfolio of assets
     def render(self, action=None):
 
+        pass
+
+        """
         if action == "BUY":
             self.chart.mark_action("BUY")
 
@@ -464,4 +471,5 @@ class StockMarket(gym.Env):
             self.cost_basis,
             self.net_worth
         ])
+        """
 

@@ -2,6 +2,7 @@ import os
 import yfinance as yf
 import json
 import pandas as pd
+import multiprocessing
 
 class YFinanceCache:
 
@@ -32,11 +33,11 @@ class YFinanceCache:
         return uid
 
 
-    def update_cache(self, df=None, path=None, uid=None, start=None, end=None, ticker=None):
+    def update_cache(self, df=None, path=None, uid=None, start=None, end=None, ticker=None, env_num=None):
 
         if not path:
             uid = self._compute_uid(start, end, ticker)
-            path = os.path.join(self.cache_folder, f"{uid}.csv")
+            path = os.path.join(self.cache_folder + f"/{env_num}/", f"{uid}.csv")
 
         if uid not in self.index:
             self.index.append(uid + "\n")
@@ -63,7 +64,7 @@ class YFinanceCache:
         # ...If not, download and cache it
         else:
 
-            df = yf.download(ticker, start=start, end=end, progress=None)
+            df = yf.download(ticker, start=start, end=end, progress=False)
 
         # Return the data regardless of how we got it
         return df

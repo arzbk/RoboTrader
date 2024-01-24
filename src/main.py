@@ -1,16 +1,26 @@
 from RoboTrader import *
 from TradingSim.Parameters import *
-
+import multiprocessing
 from datetime import datetime
+import logging
+
+logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
 if __name__ == "__main__":
 
+    multiprocessing.freeze_support()
+
     # Specify Common Algo Params
-    stocks_to_trade=['QCOM', 'MSFT']
-    num_assets = len(stocks_to_trade)
+    stocks_to_trade=None
+    num_assets = 2
+    lookback_steps = 20
     use_indicators = True
     indicators = ["SMA", "RSI", "EMA"]
-    indicator_args = {"RSI": {"timeperiod": 20}, "SMA": {"timeperiod": 20}, "EMA": {"timeperiod": 20}}
+    indicator_args = {
+        "RSI": {"timeperiod": lookback_steps},
+        "SMA": {"timeperiod": lookback_steps},
+        "EMA": {"timeperiod": lookback_steps}
+    }
 
     # Setup experiment params
     exp_params = Experiment(
@@ -18,7 +28,7 @@ if __name__ == "__main__":
         seed=42,
         torch_deterministic=True,
         cuda=True,
-        track=True,
+        track=False,
         wandb_project_name="RoboTrader",
         wandb_entity=None,
         capture_video=False,
@@ -37,13 +47,14 @@ if __name__ == "__main__":
         buffer_size=int(1e6),
         gamma=0.90,
         tau=0.003,
-        batch_size=1024,
+        batch_size=256,
         eval_episodes=3,
         policy_noise=0.15,
         exploration_noise=0.15, # 0.25 previously
         learning_starts=25e3,
         policy_frequency=2,
         noise_clip=0.5,
+        num_envs=2,
         debug_mode=False,
         profile_mode=False
     )
@@ -56,7 +67,7 @@ if __name__ == "__main__":
         short_selling=False,
         rolling_window_size=30,
         period_months=60,
-        lookback_steps=20,
+        lookback_steps=lookback_steps,
         fixed_start_date=datetime(2011, 1, 1),
         range_start_date=None,
         range_end_date=None,
@@ -79,7 +90,7 @@ if __name__ == "__main__":
         short_selling=False,
         rolling_window_size=30,
         period_months=24,
-        lookback_steps=20,
+        lookback_steps=lookback_steps,
         fixed_start_date=datetime(2016, 1, 1),
         range_start_date=None,
         range_end_date=None,

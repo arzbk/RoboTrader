@@ -2,6 +2,8 @@
 import os
 import random
 import time
+from datetime import datetime
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -12,7 +14,9 @@ import logging
 
 # My imports
 from TradingSim.Env import StockMarket
+from TradingSim.DataManager import DataManager
 from Algorithms.TD3.PyTorch import TD3
+from TradingSim.async_envs import *
 
 class RoboTrader:
 
@@ -48,13 +52,13 @@ class RoboTrader:
         return round(time.time())
 
 
-    def _make_env(self, seed, run_name, **kwargs):
+    def _make_env(self, **kwargs):
         def thunk():
             env = StockMarket(
                 **kwargs
             )
             env = gym.wrappers.RecordEpisodeStatistics(env)
-            env.action_space.seed(seed)
+            env.action_space.seed(kwargs['seed'])
             return env
 
         return thunk
@@ -112,28 +116,68 @@ class RoboTrader:
         torch.manual_seed(self.exp_p.seed)
         torch.backends.cudnn.deterministic = self.exp_p.torch_deterministic
 
-        # trn env setup
-        trn_env = self._make_env(
-            self.exp_p.seed,
-            self.run_name,
-            cash=self.train_p.cash,
-            max_trade_perc=self.train_p.max_trade_perc,
-            max_drawdown=self.train_p.max_drawdown,
-            include_ti=self.train_p.include_ti,
+        # Intialize data manager for training
+        dm = DataManager(
+            seed=self.exp_p.seed,
+            rolling_window_size=30,
+            range_start_date=self.train_p.range_start_date,
+            range_end_date=self.train_p.range_end_date,
+            fixed_portfolio=None,
+            fixed_start_date=None,
             period_months=self.train_p.period_months,
+            num_envs=self.algo_p.num_envs,
             num_assets=self.train_p.num_assets,
-            fixed_start_date=self.train_p.fixed_start_date,
-            fixed_portfolio=self.train_p.fixed_portfolio,
-            use_fixed_trade_cost=self.train_p.use_fixed_trade_cost,
-            perc_trade_cost=self.train_p.perc_trade_cost,
-            lookback_steps=self.train_p.lookback_steps,
+            include_ti=self.train_p.include_ti,
             indicator_list=self.train_p.indicator_list,
-            indicator_args=self.train_p.indicator_args
+            indicator_args=self.train_p.indicator_args,
+            episodes=250
         )
-        envs = gym.vector.SyncVectorEnv([trn_env])
+
+        # trn env setup
+        env_list = [
+            self._make_env(
+                seed=self.exp_p.seed,
+                env_num=i,
+                cash=self.train_p.cash,
+                max_trade_perc=self.train_p.max_trade_perc,
+                max_drawdown=self.train_p.max_drawdown,
+                include_ti=self.train_p.include_ti,
+                period_months=self.train_p.period_months,
+                num_assets=self.train_p.num_assets,
+                fixed_start_date=self.train_p.fixed_start_date,
+                fixed_portfolio=self.train_p.fixed_portfolio,
+                use_fixed_trade_cost=self.train_p.use_fixed_trade_cost,
+                perc_trade_cost=self.train_p.perc_trade_cost,
+                lookback_steps=self.train_p.lookback_steps,
+                indicator_list=self.train_p.indicator_list,
+                indicator_args=self.train_p.indicator_args
+            )
+            for i in range(self.algo_p.num_envs)
+        ]
+        envs = get_envs(env_list)
         assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
+        """
+        # Intialize data manager for evals
+        dm_e = DataManager(
+            seed=self.exp_p.seed,
+            rolling_window_size=30,
+            range_start_date=self.test_p.range_start_date,
+            range_end_date=self.test_p.range_end_date,
+            fixed_portfolio=['QCOM', 'MSFT'],
+            fixed_start_date=datetime(2016, 1, 1),
+            period_months=self.test_p.period_months,
+            num_envs=self.algo_p.num_envs,
+            num_assets=self.test_p.num_assets,
+            include_ti=self.test_p.include_ti,
+            indicator_list=self.test_p.indicator_list,
+            indicator_args=self.test_p.indicator_args,
+            episodes=250
+        )
+        """
+
         eval_env = StockMarket(
+            seed=self.exp_p.seed+1,
             cash=self.test_p.cash,
             max_trade_perc=self.test_p.max_trade_perc,
             max_drawdown=self.test_p.max_drawdown,
@@ -187,8 +231,8 @@ class RoboTrader:
         # Enable batch norm learning
         p.switch_to_train_mode()
 
-        # Reset environment and profile this process if applicable (mostly data preprocessing)
-        obs, _ = envs.reset(seed=self.exp_p.seed)
+        # Perform initial reset
+        obs, _ = envs.reset()
 
         # Begin training loop
         for global_step in range(self.algo_p.total_timesteps):
@@ -247,7 +291,8 @@ class RoboTrader:
                     real_next_obs[idx] = infos["final_observation"][idx]
 
             # Add to Replay Buffer
-            replay_buffer.add(obs, real_next_obs, actions, rewards, terminations, infos)
+            for i in range(envs.num_envs):
+                replay_buffer.add(obs[i], real_next_obs[i], actions[i], rewards[i], terminations[i], infos[i])
 
             # Get next observation
             obs = next_obs

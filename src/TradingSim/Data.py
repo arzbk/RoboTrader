@@ -2,11 +2,11 @@ from datetime import timedelta
 from datetime import datetime
 
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
-import pandas_ta
 import calendar
 import random
 import csv
 from pandas_market_calendars import get_calendar
+
 from .YFinanceCache import *
 
 class StockData:
@@ -179,7 +179,7 @@ class StockData:
         self.stock_df[ticker] = df
 
         # Convert dataframes to numpy arrays and add to cython dicts for fast retrieval
-        cols = {}
+        cols: cython.dict = {}
         for col in self.stock_df[ticker].columns:
             cols[col] = self.stock_df[ticker][col].to_numpy()
         self.stock_data[ticker] = cols
@@ -257,10 +257,10 @@ class StockData:
     def __len__(self):
         return self.max_steps
 
-
     def next(self):
         self.current_step += 1
         self.i = self.current_step + self.start_index
+        retval: cython.dict = {}
         retval = {
             ticker: {
                 col: self.stock_data[ticker][col][self.i]
@@ -270,6 +270,7 @@ class StockData:
         }
 
         return retval
+
 
     def get_leading_data(self):
         return self.leading_data

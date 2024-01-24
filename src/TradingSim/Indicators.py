@@ -6,11 +6,11 @@ class Indicator:
 
     def __init__(self,
                  df,
-                 col_open='Open',
-                 col_close='Close',
-                 col_high='High',
-                 col_low='Low',
-                 col_volume='Volume'
+                 col_open='open',
+                 col_close='close',
+                 col_high='high',
+                 col_low='low',
+                 col_volume='volume'
                  ):
         self.df = df
         self.col_open = col_open

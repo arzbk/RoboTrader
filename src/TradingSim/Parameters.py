@@ -50,6 +50,7 @@ class Algorithm:
         learning_starts=8e4,
         policy_frequency=2,
         noise_clip=0.5,
+        num_envs=1,
         debug_mode=False,
         profile_mode=False,
     ):
@@ -68,6 +69,7 @@ class Algorithm:
         self.learning_starts = learning_starts
         self.policy_frequency = policy_frequency
         self.noise_clip = noise_clip
+        self.num_envs = num_envs
         self.debug_mode = debug_mode
         self.profile_mode = profile_mode
 

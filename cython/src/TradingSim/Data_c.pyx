@@ -12,7 +12,6 @@ from pandas_market_calendars import get_calendar
 from YFinanceCache import *
 
 class StockData:
-
     # Declare Cython Tracking Vars
     start_index: cython.int
     current_step: cython.int
@@ -24,6 +23,7 @@ class StockData:
     stock_data: cython.dict
     lead_df: cython.dict
     lead_data: cython.dict
+
     def __init__(self,
                  filename="Stock Data/sp500_stocks.csv",
                  num_assets=1,
