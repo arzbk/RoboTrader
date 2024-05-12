@@ -6,6 +6,8 @@ A Twin Deterministic Policy Gradient approach (TD3) was created and trained on a
 downloaded from Yahoo Finance on stocks belonging to the SP500 index in the US. The reward for the network is based on the difference in value from open to close of a trading day - where actions (such as buying shares and selling at a higher price) are 
 reinforced.
 
+The state-space used was identical to that which was employed by the authors of the paper. Comparable results were achieved in testing.
+
 TensorBoard is utilized to provide live metrics of the networks performance and training progress as the simulation plays out.
 
 #Future Areas for Improvement
