@@ -1,4 +1,4 @@
-#RoboTrader - Deep Reinforcement Learning for Automated Portfolio Management
+# RoboTrader - Deep Reinforcement Learning for Automated Portfolio Management
 
 This project was heavily inspired by the great work outlined in this research paper: https://ieeexplore.ieee.org/abstract/document/9877940.
 
