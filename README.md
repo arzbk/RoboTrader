@@ -10,7 +10,7 @@ The state-space used was identical to that which was employed by the authors of 
 
 TensorBoard is utilized to provide live metrics of the networks performance and training progress as the simulation plays out.
 
-#Future Areas for Improvement
+# Future Areas for Improvement
 
 - Explore using the Transformers architecture to better capture non-linear relationships in the time-series data that may impact the performance of a given stock.
 - Conduct further data exploration leveraging unsupervised learning approaches such as clustering to identify additional candidates to use as input features for the network.
